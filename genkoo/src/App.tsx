@@ -1,50 +1,24 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import React, { useState } from 'react';
+import { Dashboard } from './Dashboard';
+import { Editor } from './Editor';
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
-
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+  // 「現在の画面がどちらか」を記録するState（状態）を定義します
+  // 初期値は 'dashboard' にしておきます
+  const [currentView, setCurrentView] = useState<'dashboard' | 'editor'>('dashboard');
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+    <div className="app-container" style={{ minHeight: '100vh', backgroundColor: '#f9f9f9' }}>
+      {/* 条件分岐（三項演算子）を使って、
+        currentView が 'dashboard' なら <Dashboard /> を、
+        そうでなければ（'editor' なら） <Editor /> を画面に表示します。
+      */}
+      {currentView === 'dashboard' ? (
+        <Dashboard onNavigate={() => setCurrentView('editor')} />
+      ) : (
+        <Editor onNavigate={() => setCurrentView('dashboard')} />
+      )}
+    </div>
   );
 }
 
