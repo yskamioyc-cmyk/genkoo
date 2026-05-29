@@ -137,6 +137,27 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
     updateHiddenTextareaPosition(selectionIndex);
   }, [selectionIndex, rawText]);
 
+  // ==========================================
+  // 💡 【修正】正しく useEffect の中に格納したオートセーブロジック
+  // ==========================================
+  useEffect(() => {
+    // テキストが空の場合は保存処理を行わない
+    if (!rawText) return;
+
+    // 1.5秒（1500ミリ秒）ユーザーの手が止まったら自動保存
+    const timer = setTimeout(async () => {
+      try {
+        await invoke('save_novel', { text: rawText });
+        console.log('【Autosave】自動保存に成功しました。');
+      } catch (error) {
+        console.error('【Autosave】自動保存に失敗しました:', error);
+      }
+    }, 1500);
+
+    // 次の文字が入力されたら、古いタイマーをクリアしてカウントし直す
+    return () => clearTimeout(timer);
+  }, [rawText]);
+
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setRawText(e.target.value);
     setSelectionIndex(e.target.selectionStart);
@@ -237,7 +258,6 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
               onClick={(e) => e.stopPropagation()} 
               style={{
                 position: 'relative',
-                // 💡 魚尾スペースが 38px -> 48px に10px広がったため、用紙全体の幅も 940px -> 950px に10px広げてバランスを維持します
                 width: '950px', 
                 height: '650px',
                 padding: '52px 0', 
@@ -256,7 +276,7 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
                 {pageIndex + 1} / {paperCount}
               </div>
 
-              {/* 原稿用紙の外枠線 (中央が10px広がったため、外枠の幅も 798px -> 808px に合わせて拡張) */}
+              {/* 原稿用紙の外枠線 */}
               <div
                 style={{
                   position: 'relative',
@@ -288,8 +308,8 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
                     
                     const localColumnGroup = Math.floor((charIndex % 200) / 20); // 0〜9列目
                     const baseColumnStart = isLeftHalf 
-                      ? (localColumnGroup * 3) + 31 + 1 // 後半：柱(31番目)を超えた位置からスタート
-                      : (localColumnGroup * 3) + 1;      // 前半：右端からスタート
+                      ? (localColumnGroup * 3) + 31 + 1 
+                      : (localColumnGroup * 3) + 1;      
 
                     const rowIndex = (charIndex % 20) + 1;
                     const char = pageChars[charIndex] || '';
@@ -400,18 +420,14 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
                     );
                   })}
 
-                  {/* 💡 【大改造】中央の柱（魚尾）レイヤー
-                      幅を 38px -> 48px に広げ、padding を設定することで、ロジックを壊さずに左右へ5pxずつの追加余白を作ります */}
+                  {/* 中央の柱（魚尾）レイヤー */}
                   <div
                     style={{
                       gridColumn: 31, 
                       gridRow: '1 / span 20',
-                      width: '48px', // 💡 38px から 48px へ (+10px)
+                      width: '48px', 
                       height: '540px',
-                      // 左右に 5px ずつの「内側余白（パディング）」を持たせ、文字要素を中に閉じ込めます
-                      padding: '10px 5px', 
-                      // 💡 左右の緑線を実質5px内側に引っ込めるため、線の代わりに内側の飾り枠として box-shadow で表現、
-                      // または左右の境界線の位置を維持します（今回は外枠に10px足したため、左右の緑の縦線は以前と同じくマス目に密着しつつ、魚尾の文字との間に完璧な5pxの空隙が生まれます）
+                      padding: '10px 5px', // 💡 不要だったカンマを削除して正常なCSSに修正
                       borderLeft: '1px solid rgba(34, 112, 63, 0.35)',
                       borderRight: '1px solid rgba(34, 112, 63, 0.35)',
                       display: 'flex',
@@ -457,7 +473,7 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
             height: activeCellCoords ? `${activeCellCoords.height}px` : '27px',
             opacity: 0,
             pointerEvents: 'none', 
-            get zIndex() { return 1; },
+            zIndex: 1,
             writingMode: 'vertical-rl',
             WebkitWritingMode: 'vertical-rl',
           }}

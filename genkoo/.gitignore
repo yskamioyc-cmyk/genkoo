@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# ローカルで生成される小説データ(.txt)を除外
+*.txt
