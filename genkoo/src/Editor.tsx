@@ -13,12 +13,18 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
   // 💡 エディタ全体にフォーカスが当たっているか
   const [isFocused, setIsFocused] = useState<boolean>(false);
 
+  // 💡 IMEウィンドウを追従させるための、現在アクティブなマスの座標・サイズ情報
+  const [activeCellCoords, setActiveCellCoords] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
+
   const charsPerPage = 400;
   const deskRef = useRef<HTMLDivElement>(null);
   const hiddenTextareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // 各マスのDOM要素への参照を保持するMap（ページ・マスごとに一意のキーで管理）
+  const cellRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
   // ==========================================
-  // 💡 【大改良】連続改行（空行）に完全対応した原稿用紙マッピングロジック
+  // 💡 連続改行（空行）に完全対応した原稿用紙マッピングロジック
   // ==========================================
   const gridChars = useMemo(() => {
     const chars: string[] = [];
@@ -28,22 +34,17 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
       const line = lines[i];
       const lineChars = line.split('');
       
-      // 1. まずその行に入っている文字を詰め込む
       for (let j = 0; j < lineChars.length; j++) {
         chars.push(lineChars[j]);
       }
 
-      // 2. 💡 【重要】最終行より前、あるいは文字が入っているか、あるいは「連続してエンターが押された空行」の場合
-      //    その行（20マス）の残りをすべて確実に空文字で埋めて、強制的に次の行へ移行させます。
       if (i < lines.length - 1) {
         const currentLinePosition = chars.length % 20;
         const remaining = 20 - currentLinePosition;
-        // remaining === 20 の場合は、すでにぴったり20マス（ちょうど1行埋まった状態）
-        // それ以外（行の途中、あるいは完全な空行で currentLinePosition が 0 の場合）は20マス埋める
         if (remaining !== 20 || lineChars.length === 0) {
           const fillCount = remaining === 20 ? 20 : remaining;
           for (let r = 0; r < fillCount; r++) {
-            chars.push(''); // 原稿用紙上の見えない空欄マスにする
+            chars.push(''); 
           }
         }
       }
@@ -51,19 +52,14 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
     return chars;
   }, [rawText]);
 
-  // マス目上の総文字数（空欄埋め含む）から、正確な動的ページ数を計算
   const totalGridChars = gridChars.length;
   const paperCount = Math.max(1, Math.ceil((totalGridChars + 1) / charsPerPage));
-
-  // 画面表示用の文字数（改行コードを除去した、純粋な執筆文字数）
   const totalChars = rawText.replace(/\n/g, '').length;
 
-  // 各ページごとのグリッド文字（400要素ずつ）に分割
   const pagesGridData = useMemo(() => {
     const arr: string[][] = [];
     for (let i = 0; i < paperCount; i++) {
       const pageSlice = gridChars.slice(i * charsPerPage, (i + 1) * charsPerPage);
-      // 400要素に満たない場合は空文字で埋める
       while (pageSlice.length < charsPerPage) {
         pageSlice.push('');
       }
@@ -72,14 +68,12 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
     return arr;
   }, [gridChars, paperCount]);
 
-  // 新しいページが追加されたら自動的に一番下へスクロール
   useEffect(() => {
     if (deskRef.current) {
       deskRef.current.scrollTop = deskRef.current.scrollHeight;
     }
   }, [paperCount]);
 
-  // 隠しtextareaのカーソル位置をStateと完全に同期させる
   useEffect(() => {
     if (hiddenTextareaRef.current) {
       hiddenTextareaRef.current.selectionStart = selectionIndex;
@@ -87,29 +81,79 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
     }
   }, [selectionIndex]);
 
-  // 隠しテキストエリアで文字が入力された（エンター含む）時の処理
+  // カーソルが乗っている現在のマスの位置を特定し、隠しtextareaをそこに瞬間移動させる
+  const updateHiddenTextareaPosition = (currentSelIndex: number) => {
+    const lines = rawText.split('\n');
+    let currentGridIdx = 0;
+    let tempRawIdx = 0;
+    let targetPageIdx = 0;
+    let targetCharIdx = 0;
+    let found = false;
+
+    for (let i = 0; i < lines.length; i++) {
+      const lineLen = lines[i].length;
+      let gridLineDelta = lineLen;
+      if (i < lines.length - 1) {
+        const tempTotal = currentGridIdx + lineLen;
+        const rem = 20 - (tempTotal % 20);
+        gridLineDelta += (rem === 20 ? 20 : rem);
+      }
+
+      if (currentSelIndex >= tempRawIdx && currentSelIndex <= tempRawIdx + lineLen) {
+        const rawOffset = currentSelIndex - tempRawIdx;
+        const globalGridCellIdx = currentGridIdx + rawOffset;
+        targetPageIdx = Math.floor(globalGridCellIdx / charsPerPage);
+        targetCharIdx = globalGridCellIdx % charsPerPage;
+        found = true;
+        break;
+      }
+
+      currentGridIdx += gridLineDelta;
+      tempRawIdx += lineLen + 1;
+    }
+
+    if (!found) {
+      const lastGridIdx = Math.max(0, totalGridChars - 1);
+      targetPageIdx = Math.floor(lastGridIdx / charsPerPage);
+      targetCharIdx = lastGridIdx % charsPerPage;
+    }
+
+    const cellKey = `${targetPageIdx}-${targetCharIdx}`;
+    const cellDom = cellRefs.current.get(cellKey);
+    if (cellDom && deskRef.current) {
+      const cellRect = cellDom.getBoundingClientRect();
+      const deskRect = deskRef.current.getBoundingClientRect();
+
+      setActiveCellCoords({
+        top: cellRect.top - deskRect.top + deskRef.current.scrollTop,
+        left: cellRect.left - deskRect.left + deskRef.current.scrollLeft,
+        width: cellRect.width,
+        height: cellRect.height,
+      });
+    }
+  };
+
+  useEffect(() => {
+    updateHiddenTextareaPosition(selectionIndex);
+  }, [selectionIndex, rawText]);
+
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setRawText(e.target.value);
     setSelectionIndex(e.target.selectionStart);
   };
 
-  // キーボードによるカーソル移動を同期
   const handleTextareaSelect = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
     setSelectionIndex(e.currentTarget.selectionStart);
   };
 
-  // 💡 マス目がクリックされた時、そのマスに対応するrawTextの正しい位置を算出してフォーカス
   const handleCellClick = (pageIdx: number, charIdx: number) => {
     const targetCellGlobalIdx = pageIdx * charsPerPage + charIdx;
-
     let currentGridIdx = 0;
     let rawIdx = 0;
     const lines = rawText.split('\n');
 
     for (let i = 0; i < lines.length; i++) {
       const lineLen = lines[i].length;
-      
-      // グリッド上、この行に割り当てられるマス数（文字数 + 改行までの空欄補正）
       let gridLineDelta = lineLen;
       if (i < lines.length - 1) {
         const tempTotal = currentGridIdx + lineLen;
@@ -118,19 +162,16 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
       }
 
       if (targetCellGlobalIdx >= currentGridIdx && targetCellGlobalIdx < currentGridIdx + gridLineDelta) {
-        // クリックした位置がこの行の中にある場合
         const offset = targetCellGlobalIdx - currentGridIdx;
         if (offset <= lineLen) {
           rawIdx += offset;
         } else {
-          // 空白スキップエリアをクリックした場合は、その行の文字の末尾（改行コードの直前）に置く
           rawIdx += lineLen;
         }
         break;
       }
-      
       currentGridIdx += gridLineDelta;
-      rawIdx += lineLen + 1; // +1 は 改行コード(\n)分
+      rawIdx += lineLen + 1;
     }
 
     const finalIdx = Math.min(Math.max(0, rawIdx), rawText.length);
@@ -141,7 +182,6 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
     }
   };
 
-  // エディタの空白部分がクリックされたら、末尾にフォーカス
   const handleDeskClick = () => {
     setSelectionIndex(rawText.length);
     setIsFocused(true);
@@ -150,12 +190,10 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
     }
   };
 
-  // 保存処理
   const handleSaveAndNavigate = async () => {
     try {
       const message = await invoke<string>('save_novel', { text: rawText });
-      console.log(message);
-      alert('保存しました！');
+      alert(message);
       onNavigate();
     } catch (error) {
       console.error('保存に失敗しました:', error);
@@ -188,6 +226,7 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
           overflowY: 'auto', 
           padding: '20px 0',
           maxHeight: 'calc(100vh - 160px)',
+          position: 'relative', 
         }}
       >
         
@@ -198,7 +237,8 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
               onClick={(e) => e.stopPropagation()} 
               style={{
                 position: 'relative',
-                width: '940px', 
+                // 💡 魚尾スペースが 38px -> 48px に10px広がったため、用紙全体の幅も 940px -> 950px に10px広げてバランスを維持します
+                width: '950px', 
                 height: '650px',
                 padding: '52px 0', 
                 backgroundColor: '#fffdf9',
@@ -216,26 +256,26 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
                 {pageIndex + 1} / {paperCount}
               </div>
 
-              {/* 原稿用紙の外枠線 */}
+              {/* 原稿用紙の外枠線 (中央が10px広がったため、外枠の幅も 798px -> 808px に合わせて拡張) */}
               <div
                 style={{
                   position: 'relative',
-                  width: '798px',          
+                  width: '808px',          
                   height: '546px', 
                   border: '3px double rgba(34, 112, 63, 0.7)',
                   backgroundColor: '#fffdf9',
                   boxSizing: 'border-box',
                 }}
               >
-                {/* 完璧に1対1で対応する不動のCSSグリッドレイアウト */}
+                {/* 1列を「5px(右ルビ) + 28px(文字) + 5px(左ルビ)」に3分割する超精密グリッド */}
                 <div
                   style={{
                     display: 'grid',
                     gridTemplateRows: 'repeat(20, 27px)',
                     gridTemplateColumns: `
-                      repeat(10, 28px 10px) 
-                      38px                   
-                      repeat(10, 28px 10px)
+                      repeat(10, 5px 28px 5px) 
+                      48px                   
+                      repeat(10, 5px 28px 5px)
                     `,
                     gridAutoFlow: 'column',
                     width: '100%',
@@ -245,14 +285,15 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
                 >
                   {Array.from({ length: charsPerPage }).map((_, charIndex) => {
                     const isLeftHalf = charIndex >= 200;
-                    const columnIndex = isLeftHalf 
-                      ? Math.floor(charIndex / 20) * 2 + 2 
-                      : Math.floor(charIndex / 20) * 2 + 1;
+                    
+                    const localColumnGroup = Math.floor((charIndex % 200) / 20); // 0〜9列目
+                    const baseColumnStart = isLeftHalf 
+                      ? (localColumnGroup * 3) + 31 + 1 // 後半：柱(31番目)を超えた位置からスタート
+                      : (localColumnGroup * 3) + 1;      // 前半：右端からスタート
 
                     const rowIndex = (charIndex % 20) + 1;
                     const char = pageChars[charIndex] || '';
 
-                    // 💡 カーソル表示位置を連続改行に対応させて厳密にマッピング
                     let currentGridIdx = 0;
                     let isCaretHere = false;
                     
@@ -271,7 +312,6 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
                           gridLineDelta += (rem === 20 ? 20 : rem);
                         }
 
-                        // カーソル選択位置（selectionIndex）がこの行のデータ内にあるか
                         if (selectionIndex >= tempRawIdx && selectionIndex <= tempRawIdx + lineLen) {
                           const rawOffset = selectionIndex - tempRawIdx;
                           if (targetGlobalCell === currentGridIdx + rawOffset) {
@@ -285,13 +325,31 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
                       }
                     }
 
+                    const cellKey = `${pageIndex}-${charIndex}`;
+
                     return (
                       <React.Fragment key={charIndex}>
-                        {/* 文字マス目 */}
+                        {/* 右側のルビスペース（5px） */}
                         <div
                           onClick={() => handleCellClick(pageIndex, charIndex)}
                           style={{
-                            gridColumn: columnIndex,
+                            gridColumn: baseColumnStart,
+                            gridRow: rowIndex,
+                            width: '5px',
+                            height: '27px',
+                            boxSizing: 'border-box',
+                          }}
+                        />
+
+                        {/* 文字マス目本体（中央の28pxに固定配置） */}
+                        <div
+                          ref={(el) => {
+                            if (el) cellRefs.current.set(cellKey, el);
+                            else cellRefs.current.delete(cellKey);
+                          }}
+                          onClick={() => handleCellClick(pageIndex, charIndex)}
+                          style={{
+                            gridColumn: baseColumnStart + 1, 
                             gridRow: rowIndex,
                             width: '28px',
                             height: '27px',
@@ -311,7 +369,7 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
                         >
                           {char}
 
-                          {/* 点滅するキャレット線を配置 */}
+                          {/* 点滅するキャレット線 */}
                           {isCaretHere && (
                             <div 
                               style={{
@@ -327,13 +385,13 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
                           )}
                         </div>
 
-                        {/* ルビ用の隙間スペース */}
+                        {/* 左側のルビスペース（5px） */}
                         <div
                           onClick={() => handleCellClick(pageIndex, charIndex)}
                           style={{
-                            gridColumn: columnIndex + 1,
+                            gridColumn: baseColumnStart + 2,
                             gridRow: rowIndex,
-                            width: '10px',
+                            width: '5px',
                             height: '27px',
                             boxSizing: 'border-box',
                           }}
@@ -342,13 +400,18 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
                     );
                   })}
 
-                  {/* 中央の柱（魚尾）レイヤー */}
+                  {/* 💡 【大改造】中央の柱（魚尾）レイヤー
+                      幅を 38px -> 48px に広げ、padding を設定することで、ロジックを壊さずに左右へ5pxずつの追加余白を作ります */}
                   <div
                     style={{
-                      gridColumn: 21,
+                      gridColumn: 31, 
                       gridRow: '1 / span 20',
-                      width: '38px', 
+                      width: '48px', // 💡 38px から 48px へ (+10px)
                       height: '540px',
+                      // 左右に 5px ずつの「内側余白（パディング）」を持たせ、文字要素を中に閉じ込めます
+                      padding: '10px 5px', 
+                      // 💡 左右の緑線を実質5px内側に引っ込めるため、線の代わりに内側の飾り枠として box-shadow で表現、
+                      // または左右の境界線の位置を維持します（今回は外枠に10px足したため、左右の緑の縦線は以前と同じくマス目に密着しつつ、魚尾の文字との間に完璧な5pxの空隙が生まれます）
                       borderLeft: '1px solid rgba(34, 112, 63, 0.35)',
                       borderRight: '1px solid rgba(34, 112, 63, 0.35)',
                       display: 'flex',
@@ -360,7 +423,6 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
                       fontWeight: 'bold',
                       userSelect: 'none',
                       backgroundColor: '#fffdf9',
-                      padding: '10px 0',
                       boxSizing: 'border-box'
                     }}
                   >
@@ -379,25 +441,29 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
           );
         })}
 
-      </div>
+        {/* 動的に配置される隠しエディタ */}
+        <textarea
+          ref={hiddenTextareaRef}
+          value={rawText}
+          onChange={handleTextareaChange}
+          onSelect={handleTextareaSelect}
+          onFocus={() => setIsFocused(true)}
+          onBlur={() => setIsFocused(false)}
+          style={{
+            position: 'absolute',
+            top: activeCellCoords ? `${activeCellCoords.top}px` : '0px',
+            left: activeCellCoords ? `${activeCellCoords.left}px` : '0px',
+            width: activeCellCoords ? `${activeCellCoords.width}px` : '28px',
+            height: activeCellCoords ? `${activeCellCoords.height}px` : '27px',
+            opacity: 0,
+            pointerEvents: 'none', 
+            get zIndex() { return 1; },
+            writingMode: 'vertical-rl',
+            WebkitWritingMode: 'vertical-rl',
+          }}
+        />
 
-      {/* すべてのタイピング、連続改行（エンター）を完璧に受け付ける隠しエリア */}
-      <textarea
-        ref={hiddenTextareaRef}
-        value={rawText}
-        onChange={handleTextareaChange}
-        onSelect={handleTextareaSelect}
-        onFocus={() => setIsFocused(true)}
-        onBlur={() => setIsFocused(false)}
-        style={{
-          position: 'fixed',
-          top: '-1000px',
-          left: '-1000px',
-          width: '10px',
-          height: '10px',
-          opacity: 0,
-        }}
-      />
+      </div>
 
       {/* カーソル点滅用のCSSアニメーション */}
       <style>{`
