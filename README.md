@@ -18,8 +18,72 @@
 - [進捗管理表](./docs/schedule.md)
 
 ## 2. ディレクトリ構成
+
+```tree
+.
+|-- LICENSE
+|-- README.md
+|-- docs/
+|   |-- basic-design/
+|   |-- images/
+|   |-- requirements.md
+|   `-- schedule.md
+`-- genkoo/
+    |-- README.md
+    |-- index.html
+    |-- node_modules/
+    |-- package-lock.json
+    |-- package.json
+    |-- public/
+    |-- src/
+    |-- src-tauri/
+    |-- tsconfig.json
+    |-- tsconfig.node.json
+    `-- vite.config.ts
+```
 ## 3. セットアップ手順
+* 現在開発中のため、インストーラーを用いてのセットアップはまだ実装されていません。以下の手順で開発環境のセットアップが可能です。
+- 【開発環境】**Node.js**と**Rust**がインストールされている、windows11（25H2以降）を使用してください。
+### 3-1. リポジトリのクローン
+* 以下のコマンドをターミナルで実行してください。
+```bash
+git clone https://www.github.com/yskamioyc-cmyk/genkoo.git
+```
+### 3-2. 依存関係のインストール
+* クローン直後はライブラリが不足しているため、以下のコマンドを実行して依存関係をインストールしてください。
+```bash
+cd genkoo
+npm install
+```
+### 3-3. 開発サーバーの起動（Tauri）
+* インストールが完了したら、以下のコマンドでTauriの開発環境を起動します（初回起動時はRustの依存ライブラリのコンパイルが行われるため、少し時間がかかります）。
+```bash
+npm run tauri dev
+```
 ## 4. 特徴
+
+* **Tauriの採用**: Electron製アプリと比較して、アプリのファイルサイズが劇的に小さく（数MB程度）、起動が高速でメモリ消費量が極めて少ない執筆環境を実現するため。
+* **React + グリッドデザイン**: 原稿用紙の「20文字×20行（400字）」という厳密なマス目を、CSS Gridを用いて1マス単位でWeb標準かつレスポンシブに制御・レンダリングするため。
+
 ## 5. 技術スタック
+
+本アプリケーションは、軽量・高速なデスクトップアプリを構築するために **Tauri** を採用し、フロントエンドに **React** と **TypeScript** を組み合わせた高パフォーマンスなアーキテクチャで開発されています。
+
+### 🌐 フロントエンド (Frontend)
+* **ライブラリ:** React 18+ (Hooks / Functional Components)
+* **言語:** TypeScript (静的型付けによる安全な開発)
+* **ビルドツール:** Vite (高速なホットリロードとバンドル)
+* **スタイリング:** Inline Styles (CSS-in-JSアプローチによるコンポーネント完結型スタイル)
+
+### 🦀 バックエンド / デスクトップ層 (Backend / Desktop Layer)
+* **フレームワーク:** Tauri v2 (Rustベースの次世代デスクトップアプリ枠組み)
+* **言語:** Rust (メモリ安全かつ超軽量なネイティブバイナリの生成)
+* **機能連携:** * `tauri::command` (Frontend ⇄ Backend 間の非同期IPC通信)
+  * Rust `std::fs` モジュールによるローカルファイル（.txt）のセキュアな入出力管理
+
+### 🛠️ 開発・環境管理 (Tools)
+* **パッケージマネージャー:** npm
+* **バージョン管理:** Git / GitHub
+
 ## 6. 更新履歴
 * **2026-05-29**: 初版作成
