@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 // 💡 Tauriのバックエンド（Rust）を呼び出すためのAPIをインポート
 import { invoke } from '@tauri-apps/api/core';
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
 
 export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => {
   // 💡 初期テキスト（改行や、複数連続の空行を含んだテキスト形式）
@@ -15,6 +17,8 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
 
   // 💡 IMEウィンドウを追従させるための、現在アクティブなマスの座標・サイズ情報
   const [activeCellCoords, setActiveCellCoords] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
+  // 💡 現在カーソルが位置しているセルのキー ("page-char") を管理してキャレット描画を完全同期
+  const [activeCellKey, setActiveCellKey] = useState<string>('');
 
   const charsPerPage = 400;
   const deskRef = useRef<HTMLDivElement>(null);
@@ -24,32 +28,77 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
   const cellRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   // ==========================================
-  // 💡 連続改行（空行）に完全対応した原稿用紙マッピングロジック
+  // 💡 原稿用紙データ生成（禁則追い込み対応）
   // ==========================================
-  const gridChars = useMemo(() => {
+  const { gridChars, gridRawIndices } = useMemo(() => {
     const chars: string[] = [];
+    const rawIndices: [number, number][] = []; 
+    
     const lines = rawText.split('\n');
+    const gyotoKinsoku = ['。', '、', '」', '』', '）', 'ー', 'ぁ', 'ぃ', 'ぅ', 'ぇ', 'ぉ', 'っ', 'ゃ', 'ゅ', 'ょ'];
+    const gyomatsuKinsoku = ['「', '『', '（'];
+
+    let currentRawIdx = 0; 
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const lineChars = line.split('');
-      
-      for (let j = 0; j < lineChars.length; j++) {
-        chars.push(lineChars[j]);
-      }
+      let currentLineLength = 0;
 
-      if (i < lines.length - 1) {
-        const currentLinePosition = chars.length % 20;
-        const remaining = 20 - currentLinePosition;
-        if (remaining !== 20 || lineChars.length === 0) {
-          const fillCount = remaining === 20 ? 20 : remaining;
-          for (let r = 0; r < fillCount; r++) {
-            chars.push(''); 
-          }
+      for (let j = 0; j < lineChars.length; j++) {
+        const char = lineChars[j];
+        const nextChar = lineChars[j + 1];
+
+        // ── 1. 行末禁則の判定（始めカッコが20マス目に来る場合、空マス化） ──
+        if (currentLineLength === 19 && gyomatsuKinsoku.includes(char)) {
+          chars.push('');
+          rawIndices.push([-1, -1]); 
+          currentLineLength = 0;
+        }
+
+        // ── 2. 行頭禁則の判定（次の文字が句読点等で、今が20マス目の場合、追い込み処理） ──
+        if (nextChar && gyotoKinsoku.includes(nextChar) && currentLineLength === 19) {
+          chars.push(char + nextChar); 
+          rawIndices.push([currentRawIdx, currentRawIdx + 2]); 
+          
+          currentRawIdx += 2; 
+          j++; 
+          currentLineLength = 0;
+          continue;
+        }
+
+        // ── 3. 通常の文字配置 ──
+        chars.push(char);
+        rawIndices.push([currentRawIdx, currentRawIdx + 1]);
+        
+        currentRawIdx++;
+        currentLineLength++;
+
+        if (currentLineLength === 20) {
+          currentLineLength = 0;
         }
       }
+
+      // ── 4. 改行（エンター）があった場合の残りのマス埋め処理 ──
+      if (i < lines.length - 1) {
+        if (currentLineLength > 0) {
+          const remaining = 20 - currentLineLength;
+          for (let r = 0; r < remaining; r++) {
+            chars.push('');
+            rawIndices.push([currentRawIdx, currentRawIdx]); 
+          }
+        } else if (lineChars.length === 0) {
+          for (let r = 0; r < 20; r++) {
+            chars.push('');
+            rawIndices.push([currentRawIdx, currentRawIdx]);
+          }
+        }
+        currentRawIdx++; 
+        currentLineLength = 0;
+      }
     }
-    return chars;
+
+    return { gridChars: chars, gridRawIndices: rawIndices };
   }, [rawText]);
 
   const totalGridChars = gridChars.length;
@@ -68,10 +117,13 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
     return arr;
   }, [gridChars, paperCount]);
 
+  // ページ数増加時のスクロール制御
+  const prevPaperCountRef = useRef<number>(paperCount);
   useEffect(() => {
-    if (deskRef.current) {
+    if (paperCount > prevPaperCountRef.current && deskRef.current) {
       deskRef.current.scrollTop = deskRef.current.scrollHeight;
     }
+    prevPaperCountRef.current = paperCount;
   }, [paperCount]);
 
   useEffect(() => {
@@ -81,44 +133,29 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
     }
   }, [selectionIndex]);
 
-  // カーソルが乗っている現在のマスの位置を特定し、隠しtextareaをそこに瞬間移動させる
+  // 隠しテキストエリアとキャレットの位置更新
   const updateHiddenTextareaPosition = (currentSelIndex: number) => {
-    const lines = rawText.split('\n');
-    let currentGridIdx = 0;
-    let tempRawIdx = 0;
-    let targetPageIdx = 0;
-    let targetCharIdx = 0;
-    let found = false;
-
-    for (let i = 0; i < lines.length; i++) {
-      const lineLen = lines[i].length;
-      let gridLineDelta = lineLen;
-      if (i < lines.length - 1) {
-        const tempTotal = currentGridIdx + lineLen;
-        const rem = 20 - (tempTotal % 20);
-        gridLineDelta += (rem === 20 ? 20 : rem);
+    let targetGridIdx = gridRawIndices.findIndex(([start, end]) => {
+      if (start === -1) return false;
+      return currentSelIndex >= start && currentSelIndex < end;
+    });
+    
+    if (targetGridIdx === -1) {
+      const lastValidIdx = [...gridRawIndices].reverse().findIndex(([start]) => start !== -1 && start < currentSelIndex);
+      if (lastValidIdx !== -1) {
+        const actualLastIdx = gridRawIndices.length - 1 - lastValidIdx;
+        targetGridIdx = Math.min(actualLastIdx + 1, totalGridChars);
+      } else {
+        targetGridIdx = 0;
       }
-
-      if (currentSelIndex >= tempRawIdx && currentSelIndex <= tempRawIdx + lineLen) {
-        const rawOffset = currentSelIndex - tempRawIdx;
-        const globalGridCellIdx = currentGridIdx + rawOffset;
-        targetPageIdx = Math.floor(globalGridCellIdx / charsPerPage);
-        targetCharIdx = globalGridCellIdx % charsPerPage;
-        found = true;
-        break;
-      }
-
-      currentGridIdx += gridLineDelta;
-      tempRawIdx += lineLen + 1;
     }
 
-    if (!found) {
-      const lastGridIdx = Math.max(0, totalGridChars - 1);
-      targetPageIdx = Math.floor(lastGridIdx / charsPerPage);
-      targetCharIdx = lastGridIdx % charsPerPage;
-    }
+    const targetPageIdx = Math.floor(targetGridIdx / charsPerPage);
+    const targetCharIdx = targetGridIdx % charsPerPage;
 
     const cellKey = `${targetPageIdx}-${targetCharIdx}`;
+    setActiveCellKey(cellKey);
+
     const cellDom = cellRefs.current.get(cellKey);
     if (cellDom && deskRef.current) {
       const cellRect = cellDom.getBoundingClientRect();
@@ -134,17 +171,16 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
   };
 
   useEffect(() => {
-    updateHiddenTextareaPosition(selectionIndex);
-  }, [selectionIndex, rawText]);
+    const t = setTimeout(() => {
+      updateHiddenTextareaPosition(selectionIndex);
+    }, 0);
+    return () => clearTimeout(t);
+  }, [selectionIndex, rawText, gridRawIndices]);
 
-  // ==========================================
-  // 💡 【修正】正しく useEffect の中に格納したオートセーブロジック
-  // ==========================================
+  // オートセーブロジック
   useEffect(() => {
-    // テキストが空の場合は保存処理を行わない
     if (!rawText) return;
 
-    // 1.5秒（1500ミリ秒）ユーザーの手が止まったら自動保存
     const timer = setTimeout(async () => {
       try {
         await invoke('save_novel', { text: rawText });
@@ -154,7 +190,6 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
       }
     }, 1500);
 
-    // 次の文字が入力されたら、古いタイマーをクリアしてカウントし直す
     return () => clearTimeout(timer);
   }, [rawText]);
 
@@ -168,35 +203,16 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
   };
 
   const handleCellClick = (pageIdx: number, charIdx: number) => {
-    const targetCellGlobalIdx = pageIdx * charsPerPage + charIdx;
-    let currentGridIdx = 0;
-    let rawIdx = 0;
-    const lines = rawText.split('\n');
-
-    for (let i = 0; i < lines.length; i++) {
-      const lineLen = lines[i].length;
-      let gridLineDelta = lineLen;
-      if (i < lines.length - 1) {
-        const tempTotal = currentGridIdx + lineLen;
-        const rem = 20 - (tempTotal % 20);
-        gridLineDelta += (rem === 20 ? 20 : rem);
-      }
-
-      if (targetCellGlobalIdx >= currentGridIdx && targetCellGlobalIdx < currentGridIdx + gridLineDelta) {
-        const offset = targetCellGlobalIdx - currentGridIdx;
-        if (offset <= lineLen) {
-          rawIdx += offset;
-        } else {
-          rawIdx += lineLen;
-        }
-        break;
-      }
-      currentGridIdx += gridLineDelta;
-      rawIdx += lineLen + 1;
+    const globalGridIdx = pageIdx * charsPerPage + charIdx;
+    const range = gridRawIndices[globalGridIdx];
+    
+    let targetRawIdx = range ? range[0] : -1;
+    
+    if (targetRawIdx === -1 || targetRawIdx === undefined) {
+      targetRawIdx = rawText.length;
     }
 
-    const finalIdx = Math.min(Math.max(0, rawIdx), rawText.length);
-    setSelectionIndex(finalIdx);
+    setSelectionIndex(targetRawIdx);
     setIsFocused(true);
     if (hiddenTextareaRef.current) {
       hiddenTextareaRef.current.focus();
@@ -222,23 +238,124 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
     }
   };
 
+  // ==========================================
+  // 💡 保存先選択ダイアログ ＆ 横向き・見切れ防止PDF出力
+  // ==========================================
+  const handleExportPDF = async () => {
+    const deskElement = document.getElementById('genko-paper-desk');
+    if (!deskElement) return;
+
+    try {
+      // 1. Tauri側の「名前を付けて保存」ダイアログを呼び出す
+      const selectedPath = await invoke<string | null>('show_save_dialog', {
+        defaultName: 'genko_output.pdf'
+      });
+
+      // キャンセルされた場合は処理を中断
+      if (!selectedPath) return;
+
+      // 2. 原稿用紙デスク内の「各用紙（ページ）」を1枚ずつ綺麗にパースしてPDF化する
+      const paperElements = deskElement.querySelectorAll('[data-genko-page]');
+      if (paperElements.length === 0) {
+        alert('出力する原稿用紙が見つかりませんでした。');
+        return;
+      }
+
+      // jsPDFの初期化：横向き('l'), 単位はミリ('mm'), サイズはB4
+      const pdf = new jsPDF({
+        orientation: 'l',
+        unit: 'mm',
+        format: 'b4'
+      });
+
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+
+      for (let i = 0; i < paperElements.length; i++) {
+        const pageEl = paperElements[i] as HTMLElement;
+
+        // html2canvasで各ページを個別に高画質キャプチャ
+        const canvas = await html2canvas(pageEl, {
+          scale: 2, 
+          useCORS: true,
+          backgroundColor: '#fffdf9', 
+        });
+
+        const imgData = canvas.toDataURL('image/png');
+
+        // 2ページ目以降はPDFに新しいページを追加
+        if (i > 0) {
+          pdf.addPage('b4', 'l');
+        }
+
+        // 用紙の横幅いっぱいに画像が収まるようにアスペクト比を計算
+        const imgWidth = pdfWidth; 
+        const imgHeight = (canvas.height * pdfWidth) / canvas.width;
+
+        let finalWidth = imgWidth;
+        let finalHeight = imgHeight;
+        if (imgHeight > pdfHeight) {
+          finalHeight = pdfHeight;
+          finalWidth = (canvas.width * pdfHeight) / canvas.height;
+        }
+
+        const xOffset = (pdfWidth - finalWidth) / 2;
+        const yOffset = (pdfHeight - finalHeight) / 2;
+
+        pdf.addImage(imgData, 'PNG', xOffset, yOffset, finalWidth, finalHeight);
+      }
+
+      // 3. 生成したPDFデータをバイナリ（Base64）に変換し、Rust経由で指定パスに保存
+      const pdfOutputB64 = pdf.output('datauristring').split(',')[1];
+      await invoke('save_file_binary', {
+        path: selectedPath,
+        base64Data: pdfOutputB64
+      });
+
+      alert('PDFファイルが指定された場所に保存されました！');
+    } catch (error) {
+      console.error('PDF出力・保存エラー:', error);
+      alert('PDFの保存中にエラーが発生しました。');
+    }
+  };
+
   return (
     <div 
       onClick={handleDeskClick}
       style={{ padding: '20px', fontFamily: 'sans-serif', backgroundColor: '#eef2f3', minHeight: '100vh', boxSizing: 'border-box' }}
     >
-      
+ 
       {/* ヘッダーエリア */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px', padding: '0 10px' }} onClick={(e) => e.stopPropagation()}>
         <h2 style={{ margin: 0, color: '#2c3e50', fontSize: '20px' }}>Genkoo エディタ</h2>
-        <div style={{ fontSize: '15px', fontWeight: 'bold', color: '#34495e' }}>
-          文字数：{totalChars}文字 / 原稿用紙：{paperCount}枚
+        
+        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+          <div style={{ fontSize: '15px', fontWeight: 'bold', color: '#34495e' }}>
+            文字数：{totalChars}文字 / 原稿用紙：{paperCount}枚
+          </div>
+          <button
+            onClick={handleExportPDF}
+            style={{
+              padding: '6px 15px',
+              fontSize: '13px',
+              fontWeight: 'bold',
+              backgroundColor: '#3498db',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              boxShadow: '0 2px 4px rgba(52,152,219,0.2)'
+            }}
+          >
+            PDFで出力する
+          </button>
         </div>
       </div>
 
       {/* 原稿用紙が縦に並ぶデスク領域 */}
       <div 
         ref={deskRef}
+        id="genko-paper-desk"
         style={{ 
           display: 'flex',
           flexDirection: 'column',
@@ -255,6 +372,7 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
           return (
             <div 
               key={pageIndex}
+              data-genko-page="true"
               onClick={(e) => e.stopPropagation()} 
               style={{
                 position: 'relative',
@@ -276,7 +394,7 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
                 {pageIndex + 1} / {paperCount}
               </div>
 
-              {/* 原稿用紙の外枠線 */}
+              {/* 原稿用紙的外枠線 */}
               <div
                 style={{
                   position: 'relative',
@@ -287,7 +405,7 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
                   boxSizing: 'border-box',
                 }}
               >
-                {/* 1列を「5px(右ルビ) + 28px(文字) + 5px(左ルビ)」に3分割する超精密グリッド */}
+                {/* グリッドシステム */}
                 <div
                   style={{
                     display: 'grid',
@@ -306,50 +424,25 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
                   {Array.from({ length: charsPerPage }).map((_, charIndex) => {
                     const isLeftHalf = charIndex >= 200;
                     
-                    const localColumnGroup = Math.floor((charIndex % 200) / 20); // 0〜9列目
+                    const localColumnGroup = Math.floor((charIndex % 200) / 20); 
                     const baseColumnStart = isLeftHalf 
                       ? (localColumnGroup * 3) + 31 + 1 
                       : (localColumnGroup * 3) + 1;      
 
                     const rowIndex = (charIndex % 20) + 1;
                     const char = pageChars[charIndex] || '';
-
-                    let currentGridIdx = 0;
-                    let isCaretHere = false;
-                    
-                    if (isFocused) {
-                      const lines = rawText.split('\n');
-                      let tempRawIdx = 0;
-                      
-                      for (let i = 0; i < lines.length; i++) {
-                        const lineLen = lines[i].length;
-                        const targetGlobalCell = pageIndex * charsPerPage + charIndex;
-
-                        let gridLineDelta = lineLen;
-                        if (i < lines.length - 1) {
-                          const tempTotal = currentGridIdx + lineLen;
-                          const rem = 20 - (tempTotal % 20);
-                          gridLineDelta += (rem === 20 ? 20 : rem);
-                        }
-
-                        if (selectionIndex >= tempRawIdx && selectionIndex <= tempRawIdx + lineLen) {
-                          const rawOffset = selectionIndex - tempRawIdx;
-                          if (targetGlobalCell === currentGridIdx + rawOffset) {
-                            isCaretHere = true;
-                          }
-                          break;
-                        }
-
-                        currentGridIdx += gridLineDelta;
-                        tempRawIdx += lineLen + 1;
-                      }
-                    }
-
                     const cellKey = `${pageIndex}-${charIndex}`;
+
+                    const isCaretHere = isFocused && activeCellKey === cellKey;
+
+                    // 追い込みマスの判定
+                    const isKinsokuPacked = char.length > 1;
+                    // 💡 安全のために条件式の位置を事前に計算してエラーを徹底回避
+                    const packedSymbolRightOffset = isKinsokuPacked && ['、', '。'].includes(char[1]) ? '2px' : '6px';
 
                     return (
                       <React.Fragment key={charIndex}>
-                        {/* 右側のルビスペース（5px） */}
+                        {/* 右側のルビスペース */}
                         <div
                           onClick={() => handleCellClick(pageIndex, charIndex)}
                           style={{
@@ -361,7 +454,7 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
                           }}
                         />
 
-                        {/* 文字マス目本体（中央の28pxに固定配置） */}
+                        {/* 文字マス目本体 */}
                         <div
                           ref={(el) => {
                             if (el) cellRefs.current.set(cellKey, el);
@@ -378,16 +471,35 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
                             display: 'flex',
                             justifyContent: 'center',
                             alignItems: 'center',
-                            fontFamily: '"Noto Serif JP", "MS Mincho", serif',
+                            fontFamily: '"Noto Serif JP", "Hiragino Mincho ProN", "MS Mincho", serif',
                             fontSize: '18px',
                             color: '#2c3e50',
-                            writingMode: 'vertical-rl',
-                            WebkitWritingMode: 'vertical-rl',
                             position: 'relative',
                             userSelect: 'none',
                           }}
                         >
-                          {char}
+                          {/* 追い込み時もメイン文字のサイズを18pxに100%維持 */}
+                          {isKinsokuPacked ? (
+                            <div style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                              <span style={{ fontSize: '18px', transform: 'translateY(-2px)' }}>
+                                {char[0]}
+                              </span>
+                              <span style={{ 
+                                position: 'absolute', 
+                                bottom: '-1px', 
+                                right: packedSymbolRightOffset, 
+                                fontSize: '11px',
+                                fontWeight: 'bold',
+                                lineHeight: 1
+                              }}>
+                                {char[1]}
+                              </span>
+                            </div>
+                          ) : (
+                            <span style={{ writingMode: 'vertical-rl', WebkitWritingMode: 'vertical-rl' }}>
+                              {char}
+                            </span>
+                          )}
 
                           {/* 点滅するキャレット線 */}
                           {isCaretHere && (
@@ -405,7 +517,7 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
                           )}
                         </div>
 
-                        {/* 左側のルビスペース（5px） */}
+                        {/* 左側のルビスペース */}
                         <div
                           onClick={() => handleCellClick(pageIndex, charIndex)}
                           style={{
@@ -427,7 +539,7 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
                       gridRow: '1 / span 20',
                       width: '48px', 
                       height: '540px',
-                      padding: '10px 5px', // 💡 不要だったカンマを削除して正常なCSSに修正
+                      padding: '10px 5px', 
                       borderLeft: '1px solid rgba(34, 112, 63, 0.35)',
                       borderRight: '1px solid rgba(34, 112, 63, 0.35)',
                       display: 'flex',
@@ -481,7 +593,6 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
 
       </div>
 
-      {/* カーソル点滅用のCSSアニメーション */}
       <style>{`
         @keyframes blink {
           from, to { opacity: 0 }
