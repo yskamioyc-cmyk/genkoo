@@ -444,8 +444,8 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
                   >
                     <div style={{ width: 0, height: 0, borderLeft: '6px solid transparent', borderRight: '6px solid transparent', borderTop: '8px solid rgba(34, 112, 63, 0.4)' }} />
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', flexGrow: 1, justifyContent: 'center' }}>
-                      <div style={{ letterSpacing: '2px' }}>バランス</div>
-                      <div>２０×２０</div>
+                      <div style={{ letterSpacing: '2px' }}>　　　　</div>
+                      <div>　　　　</div>
                       <div style={{ fontSize: '10px', opacity: 0.8 }}>Genkoo</div>
                     </div>
                     <div style={{ width: 0, height: 0, borderLeft: '6px solid transparent', borderRight: '6px solid transparent', borderBottom: '8px solid rgba(34, 112, 63, 0.4)' }} />
