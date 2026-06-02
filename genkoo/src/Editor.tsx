@@ -238,84 +238,64 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
     }
   };
 
-  // ==========================================
-  // 💡 保存先選択ダイアログ ＆ 横向き・見切れ防止PDF出力
+// ==========================================
+  // 🖨️ エディタ画面の見た目をそのままキャプチャしてPDF化（完全修正版）
   // ==========================================
   const handleExportPDF = async () => {
-    const deskElement = document.getElementById('genko-paper-desk');
-    if (!deskElement) return;
-
     try {
-      // 1. Tauri側の「名前を付けて保存」ダイアログを呼び出す
+      // 💡 1. Tauriの仕様に完全準拠させ、キーを "defaultName" に戻します
       const selectedPath = await invoke<string | null>('show_save_dialog', {
         defaultName: 'genko_output.pdf'
       });
 
-      // キャンセルされた場合は処理を中断
-      if (!selectedPath) return;
+      if (!selectedPath) return; // キャンセルされた場合は処理を中断
 
-      // 2. 原稿用紙デスク内の「各用紙（ページ）」を1枚ずつ綺麗にパースしてPDF化する
-      const paperElements = deskElement.querySelectorAll('[data-genko-page]');
-      if (paperElements.length === 0) {
-        alert('出力する原稿用紙が見つかりませんでした。');
+      // 💡 既存のデザイン（生成り色）を維持した原稿用紙の要素をピンポイントで取得
+      const element = document.getElementById('paper-container');
+
+      if (!element) {
+        console.error('印刷対象の原稿用紙画面要素が見つかりませんでした。');
         return;
       }
 
-      // jsPDFの初期化：横向き('l'), 単位はミリ('mm'), サイズはB4
+      // 2. キャプチャの瞬間だけ、フォントをデバイス標準の美しい「明朝体」に変更
+      const originalFontFamily = (element as HTMLElement).style.fontFamily;
+      (element as HTMLElement).style.fontFamily = '"Yu Mincho", "YuMincho", "MS Mincho", "Hiragino Mincho ProN", serif';
+
+      // 3. html2canvasで、魚尾スペースも美しい緑のマス目も、見た目そのまま高画質（scale: 2）で撮影
+      const canvas = await html2canvas(element as HTMLElement, {
+        scale: 2,             // 印刷に耐えうる高画質化
+        useCORS: true,        // 崩れ防止
+        backgroundColor: null // 既存のエディタの美しい生成り色をそのまま維持
+      });
+
+      // 撮影終了後、すぐにフォント設定を元の画面表示に戻す
+      (element as HTMLElement).style.fontFamily = originalFontFamily;
+
+      const imgData = canvas.toDataURL('image/png');
+
+      // 4. jsPDFを初期化（横向き B4 サイズ）
       const pdf = new jsPDF({
         orientation: 'l',
         unit: 'mm',
         format: 'b4'
       });
 
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = pdf.internal.pageSize.getHeight();
+      const pdfWidth = pdf.internal.pageSize.getWidth();   // B4横幅：約364mm
+      const pdfHeight = pdf.internal.pageSize.getHeight(); // B4縦幅：約257mm
 
-      for (let i = 0; i < paperElements.length; i++) {
-        const pageEl = paperElements[i] as HTMLElement;
+      // 撮影した原稿用紙の画像を、B4の紙面にぴったりサイズで配置
+      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
 
-        // html2canvasで各ページを個別に高画質キャプチャ
-        const canvas = await html2canvas(pageEl, {
-          scale: 2, 
-          useCORS: true,
-          backgroundColor: '#fffdf9', 
-        });
-
-        const imgData = canvas.toDataURL('image/png');
-
-        // 2ページ目以降はPDFに新しいページを追加
-        if (i > 0) {
-          pdf.addPage('b4', 'l');
-        }
-
-        // 用紙の横幅いっぱいに画像が収まるようにアスペクト比を計算
-        const imgWidth = pdfWidth; 
-        const imgHeight = (canvas.height * pdfWidth) / canvas.width;
-
-        let finalWidth = imgWidth;
-        let finalHeight = imgHeight;
-        if (imgHeight > pdfHeight) {
-          finalHeight = pdfHeight;
-          finalWidth = (canvas.width * pdfHeight) / canvas.height;
-        }
-
-        const xOffset = (pdfWidth - finalWidth) / 2;
-        const yOffset = (pdfHeight - finalHeight) / 2;
-
-        pdf.addImage(imgData, 'PNG', xOffset, yOffset, finalWidth, finalHeight);
-      }
-
-      // 3. 生成したPDFデータをバイナリ（Base64）に変換し、Rust経由で指定パスに保存
+      // 5. 完成したPDFをBase64に変換してRust側に渡し、バイナリとして安全に保存
       const pdfOutputB64 = pdf.output('datauristring').split(',')[1];
-      await invoke('save_file_binary', {
-        path: selectedPath,
-        base64Data: pdfOutputB64
-      });
-
-      alert('PDFファイルが指定された場所に保存されました！');
+      await invoke('save_file_binary', { path: selectedPath, base64Data: pdfOutputB64 });
+      
+      // 💡 クラッシュを引き起こす alert() の代わりにコンソールログで成功を出力
+      console.log('【成功】エディタ画面そのままの美しい縦書き原稿用紙PDFが出力されました！');
     } catch (error) {
-      console.error('PDF出力・保存エラー:', error);
-      alert('PDFの保存中にエラーが発生しました。');
+      // 💡 エラー時も alert() を使わず安全にログに残します
+      console.error('PDF出力エラー詳細:', error);
     }
   };
 
@@ -371,6 +351,7 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
         {pagesGridData.map((pageChars, pageIndex) => {
           return (
             <div 
+              id="paper-container"
               key={pageIndex}
               data-genko-page="true"
               onClick={(e) => e.stopPropagation()} 
