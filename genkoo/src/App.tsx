@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Dashboard } from './Dashboard';
 import { Editor } from './Editor';
 
