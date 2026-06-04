@@ -12,10 +12,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
   // ─── 💡 ダイアログ（モーダル）用の状態管理 ───
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false); // 👈 削除用を追加
   
   const [newFileName, setNewFileName] = useState('');
   const [selectedOldName, setSelectedOldName] = useState('');
   const [renameTargetName, setRenameTargetName] = useState('');
+  const [deleteTargetName, setDeleteTargetName] = useState(''); // 👈 削除対象を記憶
 
   // ファイル一覧を再取得する共通処理
   const fetchFiles = async () => {
@@ -67,11 +69,25 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
     }
   };
 
+  // ─── ✨ ③ ファイル削除処理 ───
+  const handleDeleteFile = async () => {
+    if (!deleteTargetName) return;
+
+    try {
+      await invoke('delete_novel', { filename: deleteTargetName });
+      setIsDeleteModalOpen(false);
+      setDeleteTargetName('');
+      fetchFiles(); // 一覧を更新
+    } catch (err) {
+      setError(err as string);
+    }
+  };
+
   return (
     <div style={{ 
       padding: '60px 40px', 
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif', 
-      backgroundColor: '#f9f8f6', // ✨ 原稿用紙の背景に調和する、少し温かみのある生成りホワイト
+      backgroundColor: '#f9f8f6', // 原稿用紙の背景に調和する、少し温かみのある生成りホワイト
       minHeight: '100vh', 
       boxSizing: 'border-box',
       color: '#2c3e50', // 文字色は読みやすい上品なダークグレー
@@ -89,7 +105,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
             fontWeight: '800', 
             letterSpacing: '3px', 
             margin: '0 0 8px 0',
-            color: '#22703f' // ✨ エディタのメインカラーである美しい緑色に統一！
+            color: '#22703f' // エディタのメインカラーである美しい緑色に統一！
           }}>
             Genkoo
           </h1>
@@ -233,37 +249,70 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
                       </span>
                     </div>
 
-                    {/* 右側：名前変更（リネーム）ボタン */}
-                    <button
-                      onClick={() => {
-                        setSelectedOldName(filename);
-                        setRenameTargetName(filename.replace('.txt', ''));
-                        setIsRenameModalOpen(true);
-                      }}
-                      style={{
-                        backgroundColor: '#ffffff',
-                        border: '1px solid #cbd5e1',
-                        color: '#64748b',
-                        padding: '6px 14px',
-                        fontSize: '12px',
-                        borderRadius: '6px',
-                        cursor: 'pointer',
-                        fontWeight: '600',
-                        transition: 'all 0.2s'
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.borderColor = '#22703f';
-                        e.currentTarget.style.backgroundColor = '#eaf4ed';
-                        e.currentTarget.style.color = '#22703f';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.borderColor = '#cbd5e1';
-                        e.currentTarget.style.backgroundColor = '#ffffff';
-                        e.currentTarget.style.color = '#64748b';
-                      }}
-                    >
-                      名前変更
-                    </button>
+                    {/* 右側：ボタンエリア（削除と名前変更） */}
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      {/* 👇 新設：削除ボタン */}
+                      <button
+                        onClick={() => {
+                          setDeleteTargetName(filename);
+                          setIsDeleteModalOpen(true);
+                        }}
+                        style={{
+                          backgroundColor: '#ffffff',
+                          border: '1px solid #cbd5e1',
+                          color: '#94a3b8',
+                          padding: '6px 14px',
+                          fontSize: '12px',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          fontWeight: '600',
+                          transition: 'all 0.2s'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.borderColor = '#e74c3c';
+                          e.currentTarget.style.backgroundColor = '#fdf2f2';
+                          e.currentTarget.style.color = '#e74c3c';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.borderColor = '#cbd5e1';
+                          e.currentTarget.style.backgroundColor = '#ffffff';
+                          e.currentTarget.style.color = '#94a3b8';
+                        }}
+                      >
+                        削除
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setSelectedOldName(filename);
+                          setRenameTargetName(filename.replace('.txt', ''));
+                          setIsRenameModalOpen(true);
+                        }}
+                        style={{
+                          backgroundColor: '#ffffff',
+                          border: '1px solid #cbd5e1',
+                          color: '#64748b',
+                          padding: '6px 14px',
+                          fontSize: '12px',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          fontWeight: '600',
+                          transition: 'all 0.2s'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.borderColor = '#22703f';
+                          e.currentTarget.style.backgroundColor = '#eaf4ed';
+                          e.currentTarget.style.color = '#22703f';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.borderColor = '#cbd5e1';
+                          e.currentTarget.style.backgroundColor = '#ffffff';
+                          e.currentTarget.style.color = '#64748b';
+                        }}
+                      >
+                        名前変更
+                      </button>
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -316,6 +365,32 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
                 <button type="submit" style={{ ...confirmButtonStyle, backgroundColor: '#22703f' }}>名前を変更する</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ─── 💮 新設：安全削除確認ダイアログ ─── */}
+      {isDeleteModalOpen && (
+        <div style={modalOverlayStyle}>
+          <div style={modalContentStyle}>
+            <h3 style={{ margin: '0 0 10px 0', fontSize: '18px', color: '#2c3e50', fontWeight: '700' }}>🗑️ ファイルを削除しますか？</h3>
+            <p style={{ margin: '0 0 25px 0', fontSize: '14px', color: '#555', lineHeight: '1.5' }}>
+              小説『<strong style={{ color: '#e74c3c' }}>{deleteTargetName.replace('.txt', '')}</strong>』を完全に消去します。<br />この操作は取り消せません。
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button type="button" onClick={() => setIsDeleteModalOpen(false)} style={cancelButtonStyle}>キャンセル</button>
+              <button 
+                type="button" 
+                onClick={handleDeleteFile} 
+                style={{ 
+                  ...confirmButtonStyle, 
+                  backgroundColor: '#e74c3c', 
+                  boxShadow: '0 4px 10px rgba(231,76,60,0.2)' 
+                }}
+              >
+                完全に削除する
+              </button>
+            </div>
           </div>
         </div>
       )}

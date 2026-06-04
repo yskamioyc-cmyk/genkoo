@@ -54,6 +54,30 @@ fn get_novel_list() -> Result<Vec<String>, String> {
     Ok(file_list)
 }
 
+// ✨【新設】指定されたファイル名から小説データを読み込むコマンド
+#[tauri::command(rename_all = "snake_case")]
+fn read_novel(filename: String) -> Result<String, String> {
+    let mut file_path = get_save_directory();
+
+    // 拡張子 .txt の自動補正
+    let mut clean_name = filename.clone();
+    if !clean_name.ends_with(".txt") {
+        clean_name.push_str(".txt");
+    }
+
+    file_path.push(&clean_name);
+    println!("【Backend】ファイルを読み込みます: {:?}", file_path);
+
+    // ファイルが存在すれば読み込み、なければ初期テキスト用に空文字を返すかエラーにする
+    if file_path.exists() {
+        fs::read_to_string(file_path)
+            .map_err(|e| format!("ファイルの読み込みに失敗しました: {}", e))
+    } else {
+        // まだ中身がない場合は空文字を返す（安全設計）
+        Ok("".to_string())
+    }
+}
+
 // ✨【新設】ファイル名を変更（リネーム）するコマンド
 #[tauri::command(rename_all = "snake_case")]
 fn rename_novel(old_name: String, new_name: String) -> Result<(), String> {
@@ -72,6 +96,23 @@ fn rename_novel(old_name: String, new_name: String) -> Result<(), String> {
     fs::rename(old_path, new_path)
         .map_err(|e| format!("ファイル名の変更に失敗しました: {}", e))?;
     Ok(())
+}
+
+// ✨【新設】指定されたファイル名の小説データを削除するコマンド
+#[tauri::command(rename_all = "snake_case")]
+fn delete_novel(filename: String) -> Result<(), String> {
+    let mut file_path = get_save_directory();
+    file_path.push(&filename);
+
+    println!("【Backend】ファイルを削除します: {:?}", file_path);
+
+    if file_path.exists() {
+        fs::remove_file(file_path)
+            .map_err(|e| format!("ファイルの削除に失敗しました: {}", e))?;
+        Ok(())
+    } else {
+        Err("削除対象のファイルが見つかりません。".to_string())
+    }
 }
 
 // ✨【新設】指定された名前で新しく白紙のテキストファイルを作成するコマンド
@@ -129,8 +170,10 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             save_novel,
             get_novel_list,
-            rename_novel,       // ✨ 追加
-            create_new_novel,   // ✨ 追加
+            create_new_novel,
+            rename_novel,      // ✨ 追加 // 追加
+            delete_novel,
+            read_novel,   // ✨ 追加
             show_save_dialog,
             save_file_binary
         ])

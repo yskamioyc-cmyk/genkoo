@@ -1,12 +1,16 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 // 💡 Tauriのバックエンド（Rust）を呼び出すためのAPIをインポート
 import { invoke } from '@tauri-apps/api/core';
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf'
 
-export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => {
+interface EditorProps {
+  currentFilename: string | null;
+  onNavigate: () => void;
+}
+export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) => {
   // 💡 初期テキスト（改行や、複数連続の空行を含んだテキスト形式）
-  const [rawText, setRawText] = useState<string>(
-    'これは本格的なＢ４判ルビスペース付き原稿用紙フォーマットのエディタです。\n\n\nここに２行の空行を挟んで、場面が転換します。\n４００文字に達すると自動的に次の紙が作られます。'
-  );
+  const [rawText, setRawText] = useState<string>("");
 
   // 💡 現在カーソルがある全体の文字インデックス
   const [selectionIndex, setSelectionIndex] = useState<number>(0);
@@ -17,6 +21,34 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
   const [activeCellCoords, setActiveCellCoords] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
 
   const charsPerPage = 400;
+  // ✨【新設】画面起動時にファイルの中身をロードする処理
+  useEffect(() => {
+    const loadFileContent = async () => {
+      // 新規作成でファイル名がまだ無い場合はデフォルトテキスト
+      const defaultText = 'これは本格的なＢ４判ルビスペース付き原稿用紙フォーマットのエディタです。\n\n\nここに２行の空行を挟んで、場面が転換します。\n４００文字に達すると自動的に次の紙が作られます。'
+      if (!currentFilename) {
+        setRawText(defaultText);
+        return;
+      }
+
+      try {
+        // Rust側から指定したファイル名の中身（文字列）を読み込む
+        const content = await invoke<string>('read_novel', { filename: currentFilename });
+        setRawText(content);
+        if (!content || content.trim() === ""){
+          setRawText(defaultText);
+        } else {
+          setRawText(content);
+        }
+      } catch (err) {
+        console.error("ファイルの読み込みに失敗しました:", err);
+        setRawText(defaultText);
+      }
+    };
+
+    loadFileContent();
+  }, [currentFilename]);
+
   const deskRef = useRef<HTMLDivElement>(null);
   const hiddenTextareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -142,13 +174,16 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
   // ==========================================
   useEffect(() => {
     // テキストが空の場合は保存処理を行わない
-    if (!rawText) return;
+    if (!currentFilename) return;
 
     // 1.5秒（1500ミリ秒）ユーザーの手が止まったら自動保存
     const timer = setTimeout(async () => {
       try {
-        await invoke('save_novel', { text: rawText });
-        console.log('【Autosave】自動保存に成功しました。');
+        const message = await invoke<string>('save_novel',{
+          filename: currentFilename,
+          text: rawText
+        })
+        console.log('【Autosave】自動保存に成功しました。', message);
       } catch (error) {
         console.error('【Autosave】自動保存に失敗しました:', error);
       }
@@ -156,7 +191,7 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
 
     // 次の文字が入力されたら、古いタイマーをクリアしてカウントし直す
     return () => clearTimeout(timer);
-  }, [rawText]);
+  }, [rawText, currentFilename]);
 
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setRawText(e.target.value);
@@ -211,14 +246,96 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
     }
   };
 
-  const handleSaveAndNavigate = async () => {
+// ✨【完全修正版】ダイアログの確実な起動 ＆ 縦書きバグ回避を両立したPDF出力処理
+  const handleExportPDF = async () => {
     try {
-      const message = await invoke<string>('save_novel', { text: rawText });
-      alert(message);
+      // 1. 【最優先】まず最初にRust側の保存ダイアログを確実に開く
+      const defaultName = currentFilename 
+        ? currentFilename.replace('.txt', '.pdf') 
+        : "原稿用紙_出力.pdf";
+        
+      const selectedPath = await invoke<string | null>('show_save_dialog', { 
+        defaultName 
+      });
+      
+      if (!selectedPath) return; // ユーザーがキャンセルした場合はここで安全に終了
+
+      // 2. 実際の原稿用紙の「紙」の要素を取得（見つからない場合は一番外側のデスクを使用）
+      const targetPaper = deskRef.current?.querySelector('[data-page]') as HTMLElement;
+      const elementToCapture = targetPaper || deskRef.current;
+
+      if (!elementToCapture) {
+        alert("印刷する原稿用紙が見つかりませんでした。");
+        return;
+      }
+
+      // 3. 💡【ブラウザの縦書きバグ対策】
+      // 撮影する一瞬だけ、一時的にコンテナのサイズをB4比率（横1414 : 縦1000）に固定します
+      const originalWidth = elementToCapture.style.width;
+      const originalHeight = elementToCapture.style.height;
+      const originalMinWidth = elementToCapture.style.minWidth;
+
+      elementToCapture.style.width = '1414px';
+      elementToCapture.style.height = '1000px';
+      elementToCapture.style.minWidth = '1414px'; // 縮み防止
+
+      // 4. 固定したサイズで美しくキャプチャ（options内部にはwidth/heightを直接指定せずブラウザに任せるのが安全）
+      const canvas = await html2canvas(elementToCapture, {
+        scale: 2, // 印刷に耐えうる高画質
+        useCORS: true,
+        backgroundColor: '#ffffff',
+        logging: false
+      });
+      
+      // 📷 シャッターが切れたので、ユーザーの画面の見た目が崩れる前に「即座に」元のCSSに戻す
+      elementToCapture.style.width = originalWidth;
+      elementToCapture.style.height = originalHeight;
+      elementToCapture.style.minWidth = originalMinWidth;
+
+      const imgData = canvas.toDataURL('image/jpeg', 0.95);
+      
+      // 5. 正確な日本JIS規格のB4用紙サイズ（横向き 364mm × 257mm）のPDFを作成
+      const pdf = new jsPDF({
+        orientation: 'landscape',
+        unit: 'mm',
+        format: [364, 257]
+      });
+      
+      const pdfWidth = pdf.internal.pageSize.getWidth();   // 364mm
+      const pdfHeight = pdf.internal.pageSize.getHeight(); // 257mm
+      
+      // 6. B4用紙の全体（余白なし）に画像を引き伸ばしてぴったり配置
+      pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
+      
+      // 7. PDFのバイナリをBase64文字列に変換してRust経由でPCに書き込み
+      const pdfBase64 = pdf.output('datauristring').split(',')[1];
+      await invoke('save_file_binary', { 
+        path: selectedPath, 
+        base64Data: pdfBase64 
+      });
+      
+      alert("B4判サイズにジャストフィットしたPDFファイルが正常に出力されました。");
+    } catch (err) {
+      console.error("PDF出力エラー:", err);
+      alert("PDFの出力に失敗しました: " + err);
+    }
+  };
+
+  const handleSaveAndNavigate = async () => {
+    // ファイル名が決まっていない場合は安全のためにデフォルト名を指定
+    const targetName = currentFilename || "無題の小説.txt";
+
+    try {
+      // Rust側に filename と text の両方を渡して上書き保存する
+      const message = await invoke<string>('save_novel', { 
+        filename: targetName, 
+        text: rawText 
+      });
+      console.log(message);
       onNavigate();
-    } catch (error) {
-      console.error('保存に失敗しました:', error);
-      alert('保存中にエラーが発生しました: ' + error);
+    } catch (err) {
+      console.error(err);
+      alert("ファイルの保存に失敗しました: " + err);
     }
   };
 
@@ -491,6 +608,29 @@ export const Editor: React.FC<{ onNavigate: () => void }> = ({ onNavigate }) => 
 
       {/* フッターエリア */}
       <div style={{ padding: '0 10px', marginTop: '10px', display: 'flex', justifyContent: 'center' }} onClick={(e) => e.stopPropagation()}>
+        <button 
+          onClick={handleExportPDF}
+          style={{ 
+            padding: '10px 30px', 
+            fontSize: '14px', 
+            fontWeight: 'bold',
+            cursor: 'pointer', 
+            backgroundColor: '#ffffff', 
+            color: '#22703f', 
+            border: '2px solid #22703f', 
+            borderRadius: '6px',
+            transition: 'all 0.2s'
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = '#eaf4ed';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = '#ffffff';
+          }}
+        >
+          PDFに出力する
+        </button>
+
         <button 
           onClick={handleSaveAndNavigate}
           style={{ 
