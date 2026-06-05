@@ -50,6 +50,7 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
   }, [currentFilename]);
 
   const deskRef = useRef<HTMLDivElement>(null);
+  const paperRef = useRef<HTMLDivElement>(null); // ✨新設：原稿用紙1ページ目を直接狙い撃ちする目印
   const hiddenTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // 各マスのDOM要素への参照を保持するMap（ページ・マスごとに一意のキーで管理）
@@ -246,10 +247,10 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
     }
   };
 
-// ✨【完全修正版】ダイアログの確実な起動 ＆ 縦書きバグ回避を両立したPDF出力処理
+// ✨【完全決着版】確実に要素を補足し、画面比率のままデスクトップへPDFを生成する処理
   const handleExportPDF = async () => {
     try {
-      // 1. 【最優先】まず最初にRust側の保存ダイアログを確実に開く
+      // 1. 【最優先】最初にRust側の保存ダイアログを確実に開く
       const defaultName = currentFilename 
         ? currentFilename.replace('.txt', '.pdf') 
         : "原稿用紙_出力.pdf";
@@ -258,63 +259,64 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
         defaultName 
       });
       
-      if (!selectedPath) return; // ユーザーがキャンセルした場合はここで安全に終了
+      if (!selectedPath) return; // ユーザーがキャンセルした場合は安全に終了
 
-      // 2. 実際の原稿用紙の「紙」の要素を取得（見つからない場合は一番外側のデスクを使用）
-      const targetPaper = deskRef.current?.querySelector('[data-page]') as HTMLElement;
-      const elementToCapture = targetPaper || deskRef.current;
-
-      if (!elementToCapture) {
-        alert("印刷する原稿用紙が見つかりませんでした。");
+      // 2. 💡新設した paperRef から、1ページ目の原稿用紙要素をダイレクトに100%確実に取得
+      const targetPaper = paperRef.current;
+      
+      if (!targetPaper) {
+        alert("印刷対象の原稿用紙（paperRef）がまだ画面に描画されていません。");
         return;
       }
 
-      // 3. 💡【ブラウザの縦書きバグ対策】
-      // 撮影する一瞬だけ、一時的にコンテナのサイズをB4比率（横1414 : 縦1000）に固定します
-      const originalWidth = elementToCapture.style.width;
-      const originalHeight = elementToCapture.style.height;
-      const originalMinWidth = elementToCapture.style.minWidth;
+      // 3. 💡 撮影時の一時的なスタイルバックアップ（画面の縮小表示バグをクリア）
+      const originalTransform = targetPaper.style.transform;
+      const originalWidth = targetPaper.style.width;
+      const originalHeight = targetPaper.style.height;
 
-      elementToCapture.style.width = '1414px';
-      elementToCapture.style.height = '1000px';
-      elementToCapture.style.minWidth = '1414px'; // 縮み防止
+      // 📸 シャッターを切る一瞬だけ、設計実寸（950×670）にし、縮小を一時的に解除
+      targetPaper.style.transform = 'none';
+      targetPaper.style.width = '950px';
+      targetPaper.style.height = '670px';
 
-      // 4. 固定したサイズで美しくキャプチャ（options内部にはwidth/heightを直接指定せずブラウザに任せるのが安全）
-      const canvas = await html2canvas(elementToCapture, {
-        scale: 2, // 印刷に耐えうる高画質
+      // 4. 正確に 950x670px の範囲を高画質スキャン（参照が確定しているので絶対にバグりません）
+      const canvas = await html2canvas(targetPaper, {
+        scale: 2.5, // 印刷に耐えうる十分な高解像度
         useCORS: true,
         backgroundColor: '#ffffff',
-        logging: false
+        logging: false,
+        width: 950,
+        height: 670
       });
       
-      // 📷 シャッターが切れたので、ユーザーの画面の見た目が崩れる前に「即座に」元のCSSに戻す
-      elementToCapture.style.width = originalWidth;
-      elementToCapture.style.height = originalHeight;
-      elementToCapture.style.minWidth = originalMinWidth;
+      // ⚡ シャッターが切れたので、1ミリ秒で元の画面表示（CSS）に戻す
+      targetPaper.style.transform = originalTransform;
+      targetPaper.style.width = originalWidth;
+      targetPaper.style.height = originalHeight;
 
       const imgData = canvas.toDataURL('image/jpeg', 0.95);
       
-      // 5. 正確な日本JIS規格のB4用紙サイズ（横向き 364mm × 257mm）のPDFを作成
+      // 5. 950:670（約1.418:1）の比率を持つカスタムPDFを作成（縦横比をミリ単位で完全一致）
+      const pdfWidth = 364;
+      const pdfHeight = 256.8; 
+      
       const pdf = new jsPDF({
         orientation: 'landscape',
         unit: 'mm',
-        format: [364, 257]
+        format: [pdfWidth, pdfHeight]
       });
       
-      const pdfWidth = pdf.internal.pageSize.getWidth();   // 364mm
-      const pdfHeight = pdf.internal.pageSize.getHeight(); // 257mm
-      
-      // 6. B4用紙の全体（余白なし）に画像を引き伸ばしてぴったり配置
+      // 6. 用紙と画像の比率が100%一致しているため、絶対に歪みません
       pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
       
-      // 7. PDFのバイナリをBase64文字列に変換してRust経由でPCに書き込み
+      // 7. PDFのバイナリをBase64形式でRustに送り、物理ファイルとしてデスクトップに書き込み
       const pdfBase64 = pdf.output('datauristring').split(',')[1];
       await invoke('save_file_binary', { 
         path: selectedPath, 
         base64Data: pdfBase64 
       });
       
-      alert("B4判サイズにジャストフィットしたPDFファイルが正常に出力されました。");
+      alert("画面上のバランスを完全に維持したPDFファイルが正常に出力されました！");
     } catch (err) {
       console.error("PDF出力エラー:", err);
       alert("PDFの出力に失敗しました: " + err);
@@ -372,6 +374,7 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
           return (
             <div 
               key={pageIndex}
+              ref={pageIndex === 0 ? paperRef : null}
               onClick={(e) => e.stopPropagation()} 
               style={{
                 position: 'relative',

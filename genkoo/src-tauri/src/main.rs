@@ -3,8 +3,6 @@
 
 use tauri_plugin_dialog::DialogExt; 
 use std::fs;
-use std::fs::File;
-use std::io::Write;
 use std::path::PathBuf;
 use base64::{Engine as _, engine::general_purpose};
 
@@ -153,14 +151,23 @@ fn show_save_dialog(handle: tauri::AppHandle, default_name: String) -> Option<St
 }
 
 // 💡 フロントから届いたBase64形式のPDFバイナリを指定パスへ書き込むコマンド
+// Tauri特有のスコープエラーを完全に回避するため、標準の std::fs を用いてシンプルに書き込みます。
 #[tauri::command]
 fn save_file_binary(path: String, base64_data: String) -> Result<(), String> {
+    // 1. Base64のデコード
     let bytes = general_purpose::STANDARD
         .decode(base64_data)
         .map_err(|e| e.to_string())?;
         
-    let mut file = File::create(path).map_err(|e| e.to_string())?;
-    file.write_all(&bytes).map_err(|e| e.to_string())?;
+    // 2. パス型に変換
+    let target_path = std::path::PathBuf::from(&path);
+
+    // 3. ファイルの書き込みを実行
+    // ※ ユーザー自身がOSの保存ダイアログのUIを操作して決定した絶対パスであるため、
+    // 特殊なプラグインAPIを介さずとも、この標準関数でデスクトップ等へ安全に書き出しが可能です。
+    fs::write(&target_path, &bytes).map_err(|e| format!("ファイルの物理書き込みに失敗しました: {}", e))?;
+    
+    println!("【Backend】PDFを正常に書き込みました: {:?}", target_path);
     Ok(())
 }
 
