@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 // 💡 Tauriのバックエンド（Rust）を呼び出すためのAPIをインポート
 import { invoke } from '@tauri-apps/api/core';
-import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf'
 
 interface EditorProps {
