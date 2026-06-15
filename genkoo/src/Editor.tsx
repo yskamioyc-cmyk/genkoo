@@ -241,7 +241,7 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
     }
   };
 
-// ✨【全ページ一括出力・縦書き括弧完全対応版 PDF出力コード】
+// 【全ページ一括出力・縦書き括弧完全対応版 PDF出力コード】
   const handleExportPDF = async () => {
     try {
       // 1. 最初にRust側の保存ダイアログを開く
@@ -295,7 +295,7 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
       const centerX = 20 + (324 / 2); // 182mm
 
       // ----------------------------------------------------
-      // 4. 💡【全ページをループ処理で1つのPDFに結合流し込み】
+      // 4. 【全ページをループ処理で1つのPDFに結合流し込み】
       // ----------------------------------------------------
       pagesGridData.forEach((pageData, pageIndex) => {
         // 2ページ目以降の処理の際は、PDFに新しい仮想ページを挿入する
@@ -348,7 +348,7 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
         pdf.setFontSize(14.5); 
         pdf.setTextColor(40, 40, 40);
 
-        // --- 7. 💡【文字流し込み & 縦書き括弧置換・特殊記号補正ロジック】 ---
+        // --- 7. 【文字流し込み & 縦書き括弧置換・特殊記号補正ロジック】 ---
         pageData.forEach(({ char, rawIdx }, index) => {
           if (!char || char.trim() === "") return;
 
@@ -365,7 +365,7 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
           const basePdfX = startX - 8.8;
           const basePdfY = gridTopY + (rowIndex * cellH) + 8.4;
 
-          // 💡【修正】ぶら下げ（1マスに2文字格納されている場合）の分離対応
+          // 【修正】ぶら下げ（1マスに2文字格納されている場合）の分離対応
           const isBurasage = char.length > 1;
           const firstChar = isBurasage ? char[0] : char;
           const secondChar = isBurasage ? char[1] : '';
@@ -402,7 +402,7 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
           if (isBurasage) {
             let targetSecondChar = secondChar;
             let secondOffsetX = 0;
-            // 💡 1マスの高さ（cellH = 10.45mm）分、下にずらして21マス目の位置（ぶら下げエリア）に描画
+            //  1マスの高さ（cellH = 10.45mm）分、下にずらして21マス目の位置（ぶら下げエリア）に描画
             let secondOffsetY = cellH; 
 
             // ぶら下がった記号の縦書き置換＆位置調整
@@ -425,9 +425,10 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
         // --- 8. 【新設】左上の余白にページ数を描画する ---
         pdf.setFontSize(10);
         pdf.setTextColor(160, 205, 175); // 控えめなグレー
-        // 💡 X=20（外枠の左端）, Y=15（外枠の上側余白）の位置に「1 / 3」のように描画します
+        //  X=20（外枠の左端）, Y=15（外枠の上側余白）の位置に「1 / 3」のように描画します
         pdf.text(`${pageIndex + 1} / ${paperCount}`, 20, 15);
-
+        
+        //  ページ左下にロゴ表示
         pdf.setFontSize(10);
         pdf.setTextColor(160,205,175);
         pdf.text("20×20 Genkoo", 22, 243);
@@ -435,11 +436,9 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
         // --- 8. 中央の柱（魚尾）の飾り文字の描画 ---
         pdf.setFontSize(10);
         pdf.setTextColor(164, 203, 175); 
-        pdf.text("▼", centerX - 1.5, 100);
-        pdf.text("▲", centerX - 1.5, 140);
+        pdf.text("▼", centerX - 1.5, 27);
+        pdf.text("▲", centerX - 1.5, 233);
         
-        // （任意）PDFの各ページの下部に実ページ番号を入れたい場合は以下を有効にしてください
-        // pdf.text(`${pageIndex + 1}`, centerX - 2, 245);
       });
 
       // 9. すべてのページが結合されたPDFバイナリをRust経由で保存
