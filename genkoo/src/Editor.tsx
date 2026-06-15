@@ -7,6 +7,11 @@ interface EditorProps {
   currentFilename: string | null;
   onNavigate: () => void;
 }
+
+// 💡 禁則処理用の文字定義
+const KINSOKU_GYOUTOU = "、。」』）】｝っゃゅょッャュョー〜…・？！"; // 行頭禁則（ぶら下げ対象）
+const KINSOKU_GYOUMATSU = "「『（【｛〈《〔［";               // 行末禁則（追い出し対象）
+
 export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) => {
   // 💡 初期テキスト（改行や、複数連続の空行を含んだテキスト形式）
   const [rawText, setRawText] = useState<string>("");
@@ -20,10 +25,9 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
   const [activeCellCoords, setActiveCellCoords] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
 
   const charsPerPage = 400;
-  // ✨【新設】画面起動時にファイルの中身をロードする処理
+  // ✨画面起動時にファイルの中身をロードする処理
   useEffect(() => {
     const loadFileContent = async () => {
-      // 新規作成でファイル名がまだ無い場合はデフォルトテキスト
       const defaultText = 'これは本格的なＢ４判ルビスペース付き原稿用紙フォーマットのエディタです。\n\n\nここに２行の空行を挟んで、場面が転換します。\n４００文字に達すると自動的に次の紙が作られます。'
       if (!currentFilename) {
         setRawText(defaultText);
@@ -31,9 +35,7 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
       }
 
       try {
-        // Rust側から指定したファイル名の中身（文字列）を読み込む
         const content = await invoke<string>('read_novel', { filename: currentFilename });
-        setRawText(content);
         if (!content || content.trim() === ""){
           setRawText(defaultText);
         } else {
@@ -49,56 +51,99 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
   }, [currentFilename]);
 
   const deskRef = useRef<HTMLDivElement>(null);
-  const paperRef = useRef<HTMLDivElement>(null); // ✨新設：原稿用紙1ページ目を直接狙い撃ちする目印
+  const paperRef = useRef<HTMLDivElement>(null); 
   const hiddenTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // 各マスのDOM要素への参照を保持するMap（ページ・マスごとに一意のキーで管理）
   const cellRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
-  // ==========================================
-  // 💡 連続改行（空行）に完全対応した原稿用紙マッピングロジック
-  // ==========================================
-  const gridChars = useMemo(() => {
-    const chars: string[] = [];
+  // ========================================================
+  // 💡 禁則処理（ぶら下げ・追い出し）を考慮した精密流し込みロジック
+  // ========================================================
+  const gridData = useMemo(() => {
+    const cells: { char: string; rawIdx: number }[] = [];
+    // rawTextの各文字インデックスが、cellsのどの位置に対応するかの高速写像マップ
+    const rawToGridMap: number[] = new Array(rawText.length + 1).fill(0);
+    
     const lines = rawText.split('\n');
+    let globalRawIdx = 0;
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      const lineChars = line.split('');
-      
-      for (let j = 0; j < lineChars.length; j++) {
-        chars.push(lineChars[j]);
+      let linePos = 0; // 現在の列の何マス目か (0 〜 19)
+      let j = 0;
+
+      while (j < line.length) {
+        const char = line[j];
+        const currentRawIdx = globalRawIdx + j;
+
+        // 【行末禁則：追い出し】20マス目（linePos === 19）に開き括弧が来たら、このマスを空けて次の列の先頭へ
+        if (linePos === 19 && KINSOKU_GYOUMATSU.includes(char)) {
+          cells.push({ char: '', rawIdx: currentRawIdx });
+          rawToGridMap[currentRawIdx] = cells.length - 1;
+          linePos = 0;
+          continue; 
+        }
+
+        // 【行頭禁則：ぶら下げ】20マス目（linePos === 19）の時、次の文字が句読点や閉じ括弧なら1つのマスに合体させる
+        if (linePos === 19 && j + 1 < line.length && KINSOKU_GYOUTOU.includes(line[j + 1])) {
+          const nextChar = line[j + 1];
+          cells.push({ char: char + nextChar, rawIdx: currentRawIdx });
+          
+          rawToGridMap[currentRawIdx] = cells.length - 1;
+          rawToGridMap[currentRawIdx + 1] = cells.length - 1; // 句読点の位置もこのマスを指すように
+          
+          j += 2;
+          linePos = 0; 
+          continue;
+        }
+
+        // 通常の流し込み
+        cells.push({ char: char, rawIdx: currentRawIdx });
+        rawToGridMap[currentRawIdx] = cells.length - 1;
+        
+        linePos++;
+        if (linePos === 20) {
+          linePos = 0;
+        }
+        j++;
       }
 
+      // 段落の終わり（改行コードの処理）
+      const nextLineRawIdx = globalRawIdx + line.length;
       if (i < lines.length - 1) {
-        const currentLinePosition = chars.length % 20;
-        const remaining = 20 - currentLinePosition;
-        if (remaining !== 20 || lineChars.length === 0) {
-          const fillCount = remaining === 20 ? 20 : remaining;
-          for (let r = 0; r < fillCount; r++) {
-            chars.push(''); 
-          }
+        const remaining = 20 - (linePos % 20);
+        const fillCount = remaining === 20 ? 20 : remaining;
+        for (let r = 0; r < fillCount; r++) {
+          cells.push({ char: '', rawIdx: nextLineRawIdx });
         }
+        rawToGridMap[nextLineRawIdx] = cells.length; // 改行位置のカーソルは次の行の先頭マスへ
+      } else {
+        rawToGridMap[nextLineRawIdx] = cells.length;
       }
+
+      globalRawIdx += line.length + 1;
     }
-    return chars;
+
+    return { cells, rawToGridMap };
   }, [rawText]);
 
-  const totalGridChars = gridChars.length;
+  const totalGridChars = gridData.cells.length;
   const paperCount = Math.max(1, Math.ceil((totalGridChars + 1) / charsPerPage));
   const totalChars = rawText.replace(/\n/g, '').length;
 
+  // 1ページ400マスずつの2次元配列に分配
   const pagesGridData = useMemo(() => {
-    const arr: string[][] = [];
+    const arr: { char: string; rawIdx: number }[][] = [];
     for (let i = 0; i < paperCount; i++) {
-      const pageSlice = gridChars.slice(i * charsPerPage, (i + 1) * charsPerPage);
+      const pageSlice = gridData.cells.slice(i * charsPerPage, (i + 1) * charsPerPage);
       while (pageSlice.length < charsPerPage) {
-        pageSlice.push('');
+        pageSlice.push({ char: '', rawIdx: rawText.length });
       }
       arr.push(pageSlice);
     }
     return arr;
-  }, [gridChars, paperCount]);
+  }, [gridData.cells, paperCount, rawText.length]);
 
   useEffect(() => {
     if (deskRef.current) {
@@ -113,42 +158,17 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
     }
   }, [selectionIndex]);
 
-  // カーソルが乗っている現在のマスの位置を特定し、隠しtextareaをそこに瞬間移動させる
+  // 写像マップを使用して、隠しtextareaの位置を特定
   const updateHiddenTextareaPosition = (currentSelIndex: number) => {
-    const lines = rawText.split('\n');
-    let currentGridIdx = 0;
-    let tempRawIdx = 0;
-    let targetPageIdx = 0;
-    let targetCharIdx = 0;
-    let found = false;
-
-    for (let i = 0; i < lines.length; i++) {
-      const lineLen = lines[i].length;
-      let gridLineDelta = lineLen;
-      if (i < lines.length - 1) {
-        const tempTotal = currentGridIdx + lineLen;
-        const rem = 20 - (tempTotal % 20);
-        gridLineDelta += (rem === 20 ? 20 : rem);
-      }
-
-      if (currentSelIndex >= tempRawIdx && currentSelIndex <= tempRawIdx + lineLen) {
-        const rawOffset = currentSelIndex - tempRawIdx;
-        const globalGridCellIdx = currentGridIdx + rawOffset;
-        targetPageIdx = Math.floor(globalGridCellIdx / charsPerPage);
-        targetCharIdx = globalGridCellIdx % charsPerPage;
-        found = true;
-        break;
-      }
-
-      currentGridIdx += gridLineDelta;
-      tempRawIdx += lineLen + 1;
+    const { cells, rawToGridMap } = gridData;
+    let globalGridCellIdx = rawToGridMap[currentSelIndex];
+    
+    if (globalGridCellIdx === undefined || globalGridCellIdx >= cells.length) {
+      globalGridCellIdx = Math.max(0, cells.length - 1);
     }
 
-    if (!found) {
-      const lastGridIdx = Math.max(0, totalGridChars - 1);
-      targetPageIdx = Math.floor(lastGridIdx / charsPerPage);
-      targetCharIdx = lastGridIdx % charsPerPage;
-    }
+    const targetPageIdx = Math.floor(globalGridCellIdx / charsPerPage);
+    const targetCharIdx = globalGridCellIdx % charsPerPage;
 
     const cellKey = `${targetPageIdx}-${targetCharIdx}`;
     const cellDom = cellRefs.current.get(cellKey);
@@ -167,29 +187,23 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
 
   useEffect(() => {
     updateHiddenTextareaPosition(selectionIndex);
-  }, [selectionIndex, rawText]);
+  }, [selectionIndex, rawText, gridData]);
 
-  // ==========================================
-  // 💡 【修正】正しく useEffect の中に格納したオートセーブロジック
-  // ==========================================
+  // オートセーブロジック
   useEffect(() => {
-    // テキストが空の場合は保存処理を行わない
     if (!currentFilename) return;
 
-    // 1.5秒（1500ミリ秒）ユーザーの手が止まったら自動保存
     const timer = setTimeout(async () => {
       try {
-        const message = await invoke<string>('save_novel',{
+        await invoke<string>('save_novel',{
           filename: currentFilename,
           text: rawText
         })
-        console.log('【Autosave】自動保存に成功しました。', message);
       } catch (error) {
         console.error('【Autosave】自動保存に失敗しました:', error);
       }
     }, 1500);
 
-    // 次の文字が入力されたら、古いタイマーをクリアしてカウントし直す
     return () => clearTimeout(timer);
   }, [rawText, currentFilename]);
 
@@ -202,36 +216,17 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
     setSelectionIndex(e.currentTarget.selectionStart);
   };
 
+  // クリックしたマスから正確なインデックスを復元
   const handleCellClick = (pageIdx: number, charIdx: number) => {
     const targetCellGlobalIdx = pageIdx * charsPerPage + charIdx;
-    let currentGridIdx = 0;
-    let rawIdx = 0;
-    const lines = rawText.split('\n');
+    const { cells } = gridData;
 
-    for (let i = 0; i < lines.length; i++) {
-      const lineLen = lines[i].length;
-      let gridLineDelta = lineLen;
-      if (i < lines.length - 1) {
-        const tempTotal = currentGridIdx + lineLen;
-        const rem = 20 - (tempTotal % 20);
-        gridLineDelta += (rem === 20 ? 20 : rem);
-      }
-
-      if (targetCellGlobalIdx >= currentGridIdx && targetCellGlobalIdx < currentGridIdx + gridLineDelta) {
-        const offset = targetCellGlobalIdx - currentGridIdx;
-        if (offset <= lineLen) {
-          rawIdx += offset;
-        } else {
-          rawIdx += lineLen;
-        }
-        break;
-      }
-      currentGridIdx += gridLineDelta;
-      rawIdx += lineLen + 1;
+    if (targetCellGlobalIdx < cells.length) {
+      setSelectionIndex(cells[targetCellGlobalIdx].rawIdx);
+    } else {
+      setSelectionIndex(rawText.length);
     }
-
-    const finalIdx = Math.min(Math.max(0, rawIdx), rawText.length);
-    setSelectionIndex(finalIdx);
+    
     setIsFocused(true);
     if (hiddenTextareaRef.current) {
       hiddenTextareaRef.current.focus();
@@ -246,199 +241,228 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
     }
   };
 
-  // ✨【100%確実・句読点右上・位置ズレなし・マス目上下見切れ完全修正PDF出力コード】
-const handleExportPDF = async () => {
-  try {
-    // 1. 最初にRust側の保存ダイアログを開く
-    const defaultName = currentFilename 
-      ? currentFilename.replace('.txt', '.pdf') 
-      : "原稿用紙_出力.pdf";
-      
-    const selectedPath = await invoke<string | null>('show_save_dialog', { 
-      defaultName 
-    });
-    
-    if (!selectedPath) return; // キャンセル時は終了
-
-    // 2. 【フリーズ対策】publicフォルダから生のフォントファイルを安全に非同期ロード
-    let fontBase64 = "";
+// ✨【全ページ一括出力・縦書き括弧完全対応版 PDF出力コード】
+  const handleExportPDF = async () => {
     try {
-      const response = await fetch('/fonts/NotoSerifJP-Regular.ttf');
-      if (!response.ok) throw new Error("Font file not found in public/fonts/");
-      const blob = await response.blob();
-      fontBase64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const result = reader.result as string;
-          resolve(result.split(',')[1]); // 純粋なBase64文字列
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
+      // 1. 最初にRust側の保存ダイアログを開く
+      const defaultName = currentFilename 
+        ? currentFilename.replace('.txt', '.pdf') 
+        : "原稿用紙_出力.pdf";
+        
+      const selectedPath = await invoke<string | null>('show_save_dialog', { 
+        defaultName 
       });
-    } catch (fontErr) {
-      console.error("フォント読み込み失敗:", fontErr);
-      alert("public/fonts/NotoSerifJP-Regular.ttf が見つからないか、読み込めませんでした。標準フォントで代用します。");
+      
+      if (!selectedPath) return; // キャンセル時は終了
+
+      // 2. 【フリーズ対策】publicフォルダから生のフォントファイルを安全に非同期ロード
+      let fontBase64 = "";
+      try {
+        const response = await fetch('/fonts/NotoSerifJP-Regular.ttf');
+        if (!response.ok) throw new Error("Font file not found in public/fonts/");
+        const blob = await response.blob();
+        fontBase64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const result = reader.result as string;
+            resolve(result.split(',')[1]); // 純粋なBase64文字列
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+      } catch (fontErr) {
+        console.error("フォント読み込み失敗:", fontErr);
+        alert("public/fonts/NotoSerifJP-Regular.ttf が見つからないか、読み込めませんでした。標準フォントで代用します。");
+      }
+
+      // 3. B4用紙サイズ（横364mm × 縦257mm）の基準設計
+      const pdfWidth = 364;
+      const pdfHeight = 257;
+      const pdf = new jsPDF({
+        orientation: 'landscape',
+        unit: 'mm',
+        format: [pdfWidth, pdfHeight]
+      });
+
+      const cellW = 11.5;       // 1マスのヨコ幅（mm）
+      const cellH = 10.45;      // 1マスのタテ高
+      const gapX = 3.0;         // 列と列の間の隙間
+      const centerSpace = 20.0; // 中央の「柱」の幅（mm）
+      const rowsPerColumn = 20; // 1列20マス
+
+      const gridTopY = 24.0;    // マス目の最上端のY座標
+      const gridBottomY = gridTopY + (rowsPerColumn * cellH);
+      const centerX = 20 + (324 / 2); // 182mm
+
+      // ----------------------------------------------------
+      // 4. 💡【全ページをループ処理で1つのPDFに結合流し込み】
+      // ----------------------------------------------------
+      pagesGridData.forEach((pageData, pageIndex) => {
+        // 2ページ目以降の処理の際は、PDFに新しい仮想ページを挿入する
+        if (pageIndex > 0) {
+          pdf.addPage([pdfWidth, pdfHeight], 'landscape');
+        }
+
+        // --- 5. 各ページごとの原稿用紙の枠線・グリッド精密線画 ---
+        pdf.setDrawColor(160, 205, 175); // 上品な緑色
+        
+        // 外枠（二重線）の描画
+        pdf.setLineWidth(0.6);
+        pdf.rect(20, 20, 324, 217); // 外枠
+        pdf.setLineWidth(0.3);
+        pdf.rect(21, 21, 322, 215); // 内枠
+        
+        // 中央の柱（魚尾エリア）の太い縦線
+        pdf.setLineWidth(0.5);
+        pdf.line(centerX - 10, 21, centerX - 10, 236);
+        pdf.line(centerX + 10, 21, centerX + 10, 236);
+
+        // グリッド線（全400マス）の描画
+        pdf.setLineWidth(0.15);
+        for (let colIndex = 0; colIndex < 20; colIndex++) {
+          let startX = 364 - 30; // 右側の余白からスタートして左に進む
+          if (colIndex < 10) {
+            startX -= colIndex * (cellW + gapX);
+          } else {
+            startX -= (10 * (cellW + gapX)) + centerSpace + ((colIndex - 10) * (cellW + gapX));
+          }
+
+          pdf.line(startX, gridTopY, startX, gridBottomY);
+          pdf.line(startX - cellW, gridTopY, startX - cellW, gridBottomY);
+
+          for (let rowIndex = 0; rowIndex <= rowsPerColumn; rowIndex++) {
+            const currentY = gridTopY + (rowIndex * cellH);
+            pdf.line(startX, currentY, startX - cellW, currentY);
+          }
+        }
+
+        // --- 6. ページごとのフォント再アクティブ化と文字サイズ設定 ---
+        if (fontBase64) {
+          pdf.addFileToVFS(`NotoSerifJP-${pageIndex}.ttf`, fontBase64);
+          pdf.addFont(`NotoSerifJP-${pageIndex}.ttf`, `NotoSerifJP-${pageIndex}`, "normal");
+          pdf.setFont(`NotoSerifJP-${pageIndex}`, "normal");
+        } else {
+          pdf.setFont("MS Gothic", "normal");
+        }
+        
+        pdf.setFontSize(14.5); 
+        pdf.setTextColor(40, 40, 40);
+
+        // --- 7. 💡【文字流し込み & 縦書き括弧置換・特殊記号補正ロジック】 ---
+        pageData.forEach(({ char, rawIdx }, index) => {
+          if (!char || char.trim() === "") return;
+
+          const colIndex = Math.floor(index / rowsPerColumn); // 0 〜 19 列
+          const rowIndex = index % rowsPerColumn;             // 0 〜 19 マス
+
+          let startX = 364 - 30;
+          if (colIndex < 10) {
+            startX -= colIndex * (cellW + gapX);
+          } else {
+            startX -= (10 * (cellW + gapX)) + centerSpace + ((colIndex - 10) * (cellW + gapX));
+          }
+
+          const basePdfX = startX - 8.8;
+          const basePdfY = gridTopY + (rowIndex * cellH) + 8.4;
+
+          // 💡【修正】ぶら下げ（1マスに2文字格納されている場合）の分離対応
+          const isBurasage = char.length > 1;
+          const firstChar = isBurasage ? char[0] : char;
+          const secondChar = isBurasage ? char[1] : '';
+
+          // --- ① 1文字目（通常の文字）の描画処理 ---
+          let targetChar = firstChar;
+          let offsetX = 0;
+          let offsetY = 0;
+
+          // 縦書きの記号・括弧の精密位置補正
+          if (firstChar === 'ー' || firstChar === '―' || firstChar === '─' || firstChar === '-') {
+            targetChar = '丨'; offsetX = 0.3; offsetY = -0.5;
+          } else if (firstChar === '、' || firstChar === '，' || firstChar === '。' || firstChar === '．') {
+            offsetX = 4.2; offsetY = -5.0;
+          } else if (firstChar === 'っ' || firstChar === 'ゃ' || firstChar === 'ゅ' || firstChar === 'ょ' || 
+                     firstChar === 'ッ' || firstChar === 'ャ' || firstChar === 'ュ' || firstChar === 'ョ') {
+            offsetX = 1.5; offsetY = -1.2;
+          } 
+          else if (firstChar === '「') { targetChar = '﹁'; offsetX = 0.0; offsetY = -1.0; }
+          else if (firstChar === '」') { targetChar = '﹂'; offsetX = 0.0; offsetY = -1.0; }
+          else if (firstChar === '（') { targetChar = '︵'; offsetX = 0.0; offsetY = -1.0; }
+          else if (firstChar === '）') { targetChar = '︶'; offsetX = 0.0; offsetY = -1.0; }
+          else if (firstChar === '『') { targetChar = '﹃'; offsetX = 0.0; offsetY = -1.0; }
+          else if (firstChar === '』') { targetChar = '﹄'; offsetX = 0.0; offsetY = -1.0; }
+          else if (firstChar === '【') { targetChar = '︻'; offsetX = 0.0; offsetY = -1.0; }
+          else if (firstChar === '】') { targetChar = '︼'; offsetX = 0.0; offsetY = -1.0; }
+          else if (firstChar === '〔') { targetChar = '︹'; offsetX = 0.0; offsetY = -1.0; }
+          else if (firstChar === '〕') { targetChar = '︺'; offsetX = 0.0; offsetY = -1.0; }
+
+          // 1文字目を描画
+          pdf.text(targetChar, basePdfX + offsetX, basePdfY + offsetY);
+
+          // --- ② 2文字目（ぶら下がっている閉じカッコなど）の描画処理 ---
+          if (isBurasage) {
+            let targetSecondChar = secondChar;
+            let secondOffsetX = 0;
+            // 💡 1マスの高さ（cellH = 10.45mm）分、下にずらして21マス目の位置（ぶら下げエリア）に描画
+            let secondOffsetY = cellH; 
+
+            // ぶら下がった記号の縦書き置換＆位置調整
+            if (secondChar === '、' || secondChar === '，' || secondChar === '。' || secondChar === '．') {
+              secondOffsetX = 4.2; secondOffsetY += -5.0;
+            } else if (secondChar === '」') { 
+              targetSecondChar = '﹂'; secondOffsetX = 0.0; secondOffsetY += -1.0; 
+            } else if (secondChar === '』') { 
+              targetSecondChar = '﹄'; secondOffsetX = 0.0; secondOffsetY += -1.0; 
+            } else if (secondChar === '）') { 
+              targetSecondChar = '︶'; secondOffsetX = 0.0; secondOffsetY += -1.0; 
+            } else if (secondChar === '】') { 
+              targetSecondChar = '︼'; secondOffsetX = 0.0; secondOffsetY += -1.0; 
+            }
+
+            // ぶら下げ文字（2文字目）を描画
+            pdf.text(targetSecondChar, basePdfX + secondOffsetX, basePdfY + secondOffsetY);
+          }
+        });
+        // --- 8. 【新設】左上の余白にページ数を描画する ---
+        pdf.setFontSize(10);
+        pdf.setTextColor(160, 205, 175); // 控えめなグレー
+        // 💡 X=20（外枠の左端）, Y=15（外枠の上側余白）の位置に「1 / 3」のように描画します
+        pdf.text(`${pageIndex + 1} / ${paperCount}`, 20, 15);
+
+        pdf.setFontSize(10);
+        pdf.setTextColor(160,205,175);
+        pdf.text("20×20 Genkoo", 22, 243);
+
+        // --- 8. 中央の柱（魚尾）の飾り文字の描画 ---
+        pdf.setFontSize(10);
+        pdf.setTextColor(164, 203, 175); 
+        pdf.text("▼", centerX - 1.5, 100);
+        pdf.text("▲", centerX - 1.5, 140);
+        
+        // （任意）PDFの各ページの下部に実ページ番号を入れたい場合は以下を有効にしてください
+        // pdf.text(`${pageIndex + 1}`, centerX - 2, 245);
+      });
+
+      // 9. すべてのページが結合されたPDFバイナリをRust経由で保存
+      const pdfBase64 = pdf.output('datauristring').split(',')[1];
+      await invoke('save_file_binary', { 
+        path: selectedPath, 
+        base64Data: pdfBase64 
+      });
+      
+      alert("すべてのページが1つに統合され、括弧の向きも縦書き用に完全修正されたPDFが出力されました！");
+    } catch (err) {
+      console.error("PDF出力エラー:", err);
+      alert("PDFの出力に失敗しました: " + err);
     }
-
-    // 3. B4用紙サイズ（横364mm × 縦257mm）のPDFインスタンスを作成
-    const pdfWidth = 364;
-    const pdfHeight = 257;
-    const pdf = new jsPDF({
-      orientation: 'landscape',
-      unit: 'mm',
-      format: [pdfWidth, pdfHeight]
-    });
-
-    // ----------------------------------------------------
-    // 4. 💡【原稿用紙の精密設計とマス目の自動描画】
-    // ----------------------------------------------------
-    const cellW = 11.5;       // 1マスのヨコ幅（mm）
-    const cellH = 10.45;      // 💡 1マスのタテ高を微調整（20マスで209mmにし、上下余白を等分）
-    const gapX = 3.0;         // 列と列の間の隙間（ルビスペース分など、mm）
-    const centerSpace = 20.0; // 中央の「柱」の幅（mm）
-    const rowsPerColumn = 20; // 1列20マス
-
-    // マス目全体の上下の開始位置を正確に中央寄せ
-    const gridTopY = 24.0;    // 💡 マス目の最上端のY座標
-    const gridBottomY = gridTopY + (rowsPerColumn * cellH); // 24.0 + 209.0 = 233.0mm
-
-    // 全体の基準線を引くための色と太さを指定
-    pdf.setDrawColor(34, 112, 63); // 画面と同じ上品な緑色
-    
-    // 外枠（二重線）の描画
-    pdf.setLineWidth(0.6);
-    pdf.rect(20, 20, 324, 217); // 外枠
-    pdf.setLineWidth(0.3);
-    pdf.rect(21, 21, 322, 215); // 内枠
-    
-    // 中央の柱（魚尾エリア）の太い縦線
-    const centerX = 20 + (324 / 2); // 182mm
-    pdf.setLineWidth(0.5);
-    pdf.line(centerX - 10, 21, centerX - 10, 236);
-    pdf.line(centerX + 10, 21, centerX + 10, 236);
-
-    // 💡【グリッド線（全400マス）を見切れないように精密描画】
-    pdf.setLineWidth(0.15); // マス目の線は細くして上品に
-    
-    for (let colIndex = 0; colIndex < 20; colIndex++) {
-      // 各列のベースとなるX座標（左端からの距離）を正確に計算
-      let startX = 364 - 30; // 右側の余白からスタートして左に進む
-      if (colIndex < 10) {
-        startX -= colIndex * (cellW + gapX);
-      } else {
-        startX -= (10 * (cellW + gapX)) + centerSpace + ((colIndex - 10) * (cellW + gapX));
-      }
-
-      // マス目の右端・左端の縦線を「内枠の上下いっぱい」ではなく「マス目の上下端（gridTopY〜gridBottomY）」に正確に引く
-      pdf.line(startX, gridTopY, startX, gridBottomY);
-      pdf.line(startX - cellW, gridTopY, startX - cellW, gridBottomY);
-
-      // 各マスを区切る横線（20マス分、合計21本）を描画
-      for (let rowIndex = 0; rowIndex <= rowsPerColumn; rowIndex++) {
-        const currentY = gridTopY + (rowIndex * cellH);
-        // 1列の幅（cellW）の分だけ横線を引く
-        pdf.line(startX, currentY, startX - cellW, currentY);
-      }
-    }
-
-    // ----------------------------------------------------
-    // 5. 日本語フォントの登録と文字設定
-    // ----------------------------------------------------
-    if (fontBase64) {
-      pdf.addFileToVFS("NotoSerifJP.ttf", fontBase64);
-      pdf.addFont("NotoSerifJP.ttf", "NotoSerifJP", "normal");
-      pdf.setFont("NotoSerifJP", "normal");
-    } else {
-      pdf.setFont("MS Gothic", "normal");
-    }
-    
-    pdf.setFontSize(14.5); // マス目の中に美しく余白を持って収まるベストサイズ
-    pdf.setTextColor(40, 40, 40);
-
-    // ----------------------------------------------------
-    // 6. 💡【完璧な文字流し込み & 特殊記号位置補正ロジック】
-    // ----------------------------------------------------
-    const pageData: string[] = pagesGridData[0] || [];
-
-    pageData.forEach((char: string, index: number) => {
-      if (!char || char.trim() === "") return;
-
-      const colIndex = Math.floor(index / rowsPerColumn); // 0 〜 19 列
-      const rowIndex = index % rowsPerColumn;             // 0 〜 19 マス
-
-      let startX = 364 - 30;
-      if (colIndex < 10) {
-        startX -= colIndex * (cellW + gapX);
-      } else {
-        startX -= (10 * (cellW + gapX)) + centerSpace + ((colIndex - 10) * (cellW + gapX));
-      }
-
-      // 💡【重要】マス目の線の真上ではなく、「四角いマス目のど真ん中」に文字が乗るようにベース位置を修正
-      // X軸: startX（右の線）から 左に約8.5mm 進んだ位置が文字の中心線
-      // Y軸: gridTopY + (rowIndex * cellH)（マスの上の線）から 下に約8.5mm 下がった位置がベースライン
-      const basePdfX = startX - 8.8;
-      const basePdfY = gridTopY + (rowIndex * cellH) + 8.4;
-
-      let targetChar = char;
-      let offsetX = 0;
-      let offsetY = 0;
-
-      // 縦書きの記号補正
-      if (char === 'ー' || char === '―' || char === '─' || char === '-') {
-        targetChar = '丨'; 
-        offsetX = 0.3; // 縦棒をマスのちょうど真ん中に乗せるための微調整
-        offsetY = -0.5;
-      } else if (char === '、' || char === '，') {
-        offsetX = 4.2;
-        offsetY = -5.0; // 読点を確実に右上に
-      } else if (char === '。' || char === '．') {
-        offsetX = 4.2;
-        offsetY = -5.0; // 句点を確実に右上に
-      } else if (char === 'っ' || char === 'ゃ' || char === 'ゅ' || char === 'ょ' || 
-                 char === 'ッ' || char === 'ャ' || char === 'ュ' || char === 'ョ') {
-        offsetX = 1.5;
-        offsetY = -1.2; // 小さい文字を右上に
-      }
-
-      // 完全に計算された美しい位置へ文字をスタンプ！
-      pdf.text(targetChar, basePdfX + offsetX, basePdfY + offsetY);
-    });
-
-    // ----------------------------------------------------
-    // 7. 中央の柱（魚尾）の飾り文字の描画
-    // ----------------------------------------------------
-    pdf.setFontSize(10);
-    pdf.setTextColor(164, 203, 175); // 前回の型エラーを解消した、上品な薄緑色
-    pdf.text("バ ラ", centerX - 3, 100);
-    pdf.text("ン ス", centerX - 3, 110);
-    pdf.text("20×20", centerX - 4.5, 125);
-    pdf.text("Genkoo", centerX - 5, 140);
-
-    // 8. PDFバイナリをBase64形式でRustに送り、物理ファイルとして書き込み
-    const pdfBase64 = pdf.output('datauristring').split(',')[1];
-    await invoke('save_file_binary', { 
-      path: selectedPath, 
-      base64Data: pdfBase64 
-    });
-    
-    alert("見切れが完全に解消され、枠線の中に文字が美しく整列した最高クオリティのPDFが出力されました！");
-  } catch (err) {
-    console.error("PDF出力エラー:", err);
-    alert("PDFの出力に失敗しました: " + err);
-  }
-};
+  };
 
   const handleSaveAndNavigate = async () => {
-    // ファイル名が決まっていない場合は安全のためにデフォルト名を指定
     const targetName = currentFilename || "無題の小説.txt";
-
     try {
-      // Rust側に filename と text の両方を渡して上書き保存する
-      const message = await invoke<string>('save_novel', { 
+      await invoke<string>('save_novel', { 
         filename: targetName, 
         text: rawText 
       });
-      console.log(message);
       onNavigate();
     } catch (err) {
       console.error(err);
@@ -496,7 +520,6 @@ const handleExportPDF = async () => {
                 cursor: 'text',
               }}
             >
-              {/* ページ番号表示 */}
               <div style={{ position: 'absolute', top: '15px', left: '25px', color: 'rgba(34, 112, 63, 0.5)', fontSize: '12px', fontWeight: 'bold' }}>
                 {pageIndex + 1} / {paperCount}
               </div>
@@ -512,7 +535,6 @@ const handleExportPDF = async () => {
                   boxSizing: 'border-box',
                 }}
               >
-                {/* 1列を「5px(右ルビ) + 28px(文字) + 5px(左ルビ)」に3分割する超精密グリッド */}
                 <div
                   style={{
                     display: 'grid',
@@ -531,43 +553,24 @@ const handleExportPDF = async () => {
                   {Array.from({ length: charsPerPage }).map((_, charIndex) => {
                     const isLeftHalf = charIndex >= 200;
                     
-                    const localColumnGroup = Math.floor((charIndex % 200) / 20); // 0〜9列目
+                    const localColumnGroup = Math.floor((charIndex % 200) / 20); 
                     const baseColumnStart = isLeftHalf 
                       ? (localColumnGroup * 3) + 31 + 1 
                       : (localColumnGroup * 3) + 1;      
 
                     const rowIndex = (charIndex % 20) + 1;
-                    const char = pageChars[charIndex] || '';
-
-                    let currentGridIdx = 0;
-                    let isCaretHere = false;
                     
-                    if (isFocused) {
-                      const lines = rawText.split('\n');
-                      let tempRawIdx = 0;
-                      
-                      for (let i = 0; i < lines.length; i++) {
-                        const lineLen = lines[i].length;
-                        const targetGlobalCell = pageIndex * charsPerPage + charIndex;
+                    const cellObj = pageChars[charIndex] || { char: '', rawIdx: 0 };
+                    const char = cellObj.char;
 
-                        let gridLineDelta = lineLen;
-                        if (i < lines.length - 1) {
-                          const tempTotal = currentGridIdx + lineLen;
-                          const rem = 20 - (tempTotal % 20);
-                          gridLineDelta += (rem === 20 ? 20 : rem);
-                        }
+                    // ✨ 💡 ぶら下げ（2文字格納されている場合）の分離処理
+                    const isBurasage = char.length > 1;
+                    const displayText = isBurasage ? char[0] : char;
+                    const burasageChar = isBurasage ? char[1] : '';
 
-                        if (selectionIndex >= tempRawIdx && selectionIndex <= tempRawIdx + lineLen) {
-                          const rawOffset = selectionIndex - tempRawIdx;
-                          if (targetGlobalCell === currentGridIdx + rawOffset) {
-                            isCaretHere = true;
-                          }
-                          break;
-                        }
-
-                        currentGridIdx += gridLineDelta;
-                        tempRawIdx += lineLen + 1;
-                      }
+                    let isCaretHere = false;
+                    if (isFocused && gridData.rawToGridMap[selectionIndex] === (pageIndex * charsPerPage + charIndex)) {
+                      isCaretHere = true;
                     }
 
                     const cellKey = `${pageIndex}-${charIndex}`;
@@ -586,7 +589,7 @@ const handleExportPDF = async () => {
                           }}
                         />
 
-                        {/* 文字マス目本体（中央の28pxに固定配置） */}
+                        {/* 文字マス目本体 */}
                         <div
                           ref={(el) => {
                             if (el) cellRefs.current.set(cellKey, el);
@@ -608,11 +611,38 @@ const handleExportPDF = async () => {
                             color: '#2c3e50',
                             writingMode: 'vertical-rl',
                             WebkitWritingMode: 'vertical-rl',
+                            direction: 'ltr', // ✨ 💡 ① 親の direction: 'rtl' によるカッコ反転現象を完全に防ぐ
                             position: 'relative',
                             userSelect: 'none',
+                            overflow: 'visible', 
                           }}
                         >
-                          {char}
+                          {/* 1文字目（通常の文字）だけをマス内に表示 */}
+                          {displayText}
+
+                          {/* ✨ 💡 ② ぶら下げ文字（句読点）をマスの完全に外側（下）に独立して絶対配置 */}
+                          {isBurasage && (
+                            <div
+                              style={{
+                                position: 'absolute',
+                                top: '27px', // ちょうどマスの高さ分下（21マス目の位置）に突き出す
+                                right: '0px',
+                                width: '28px',
+                                height: '27px',
+                                display: 'flex',
+                                justifyContent: 'center',
+                                alignItems: 'center',
+                                writingMode: 'vertical-rl',
+                                WebkitWritingMode: 'vertical-rl',
+                                direction: 'ltr',
+                                fontSize: '18px',
+                                color: '#2c3e50',
+                                pointerEvents: 'none',
+                              }}
+                            >
+                              {burasageChar}
+                            </div>
+                          )}
 
                           {/* 点滅するキャレット線 */}
                           {isCaretHere && (
@@ -630,7 +660,7 @@ const handleExportPDF = async () => {
                           )}
                         </div>
 
-                        {/* 左側のルビスペース（5px） */}
+                        {/* 左側のルビススペース（5px） */}
                         <div
                           onClick={() => handleCellClick(pageIndex, charIndex)}
                           style={{
@@ -652,7 +682,7 @@ const handleExportPDF = async () => {
                       gridRow: '1 / span 20',
                       width: '48px', 
                       height: '540px',
-                      padding: '10px 5px', // 💡 不要だったカンマを削除して正常なCSSに修正
+                      padding: '10px 5px', 
                       borderLeft: '1px solid rgba(34, 112, 63, 0.35)',
                       borderRight: '1px solid rgba(34, 112, 63, 0.35)',
                       display: 'flex',
@@ -706,7 +736,6 @@ const handleExportPDF = async () => {
 
       </div>
 
-      {/* カーソル点滅用のCSSアニメーション */}
       <style>{`
         @keyframes blink {
           from, to { opacity: 0 }
@@ -715,7 +744,7 @@ const handleExportPDF = async () => {
       `}</style>
 
       {/* フッターエリア */}
-      <div style={{ padding: '0 10px', marginTop: '10px', display: 'flex', justifyContent: 'center' }} onClick={(e) => e.stopPropagation()}>
+      <div style={{ padding: '0 10px', marginTop: '10px', display: 'flex', justifyContent: 'center', gap: '15px' }} onClick={(e) => e.stopPropagation()}>
         <button 
           onClick={handleExportPDF}
           style={{ 
