@@ -65,6 +65,11 @@ npm run tauri dev
 ```
 
 ## 4. 動作画面
+* アプリ起動時の管理画面は以下の通りです。
+<p align = "center">
+  <img src = "./docs/images/genko_admin.png" width = "70%">
+</p>
+
 * エディタの動作画面例は以下の通りです。
 <p align = "center">
     <img src ="./docs/images/genkooeditor.png" width = "70%">
