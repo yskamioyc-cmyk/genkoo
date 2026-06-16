@@ -110,7 +110,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
             Genkoo
           </h1>
           <p style={{ color: '#7f8c8d', fontSize: '14px', margin: 0, fontWeight: '500' }}>
-            Web-based Manuscript Paper Editor
+            Web-based Manuscript Paper Editor version 1.0.0
           </p>
         </div>
 
