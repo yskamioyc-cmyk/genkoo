@@ -349,7 +349,7 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
         pdf.setTextColor(40, 40, 40);
 
         // --- 7. 【文字流し込み & 縦書き括弧置換・特殊記号補正ロジック】 ---
-        pageData.forEach(({ char, rawIdx }, index) => {
+        pageData.forEach(({ char, }, index) => {
           if (!char || char.trim() === "") return;
 
           const colIndex = Math.floor(index / rowsPerColumn); // 0 〜 19 列
