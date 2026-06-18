@@ -5,16 +5,26 @@ use tauri_plugin_dialog::DialogExt;
 use std::fs;
 use std::path::PathBuf;
 use base64::{Engine as _, engine::general_purpose};
+use tauri::Manager;
 
 // 💡 確実にファイルを読み書きするための「共通の保存ディレクトリ」を計算する関数
-fn get_save_directory() -> PathBuf {
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+fn get_save_directory(handle: &tauri::AppHandle) -> PathBuf {
+    // ユーザー専用のローカルアプリデータ領域を安全に取得
+    let app_dir = handle.path().app_local_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
+
+    // フォルダ（AppData/Local/com.yskamioyc.genkoo）が存在しなければ自動作成
+    if !app_dir.exists() {
+        let _ = fs::create_dir_all(&app_dir);
+    }
+    
+    app_dir
 }
 
 // 💡 小説を自動保存するコマンド
 #[tauri::command]
-fn save_novel(filename: String, text: String) -> Result<String, String> {
-    let mut save_path = get_save_directory();
+fn save_novel(handle: tauri::AppHandle, filename: String, text: String) -> Result<String, String> {
+    let mut save_path = get_save_directory(&handle);
 
     // ⚠️ 注意：この save_novel は現在固定名になっていますが、
     // エディタ画面側も将来的に選択したファイル名で保存できるようにするため、
@@ -35,8 +45,8 @@ fn save_novel(filename: String, text: String) -> Result<String, String> {
 
 // 💡 ファイル一覧を取得するコマンド
 #[tauri::command]
-fn get_novel_list() -> Result<Vec<String>, String> {
-    let target_dir = get_save_directory();
+fn get_novel_list(handle: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let target_dir = get_save_directory(&handle);
     let mut file_list = Vec::new();
 
     if let Ok(entries) = fs::read_dir(target_dir) {
@@ -54,8 +64,8 @@ fn get_novel_list() -> Result<Vec<String>, String> {
 
 // ✨【新設】指定されたファイル名から小説データを読み込むコマンド
 #[tauri::command(rename_all = "snake_case")]
-fn read_novel(filename: String) -> Result<String, String> {
-    let mut file_path = get_save_directory();
+fn read_novel(handle: tauri::AppHandle, filename: String) -> Result<String, String> {
+    let mut file_path = get_save_directory(&handle);
 
     // 拡張子 .txt の自動補正
     let mut clean_name = filename.clone();
@@ -78,8 +88,8 @@ fn read_novel(filename: String) -> Result<String, String> {
 
 // ✨【新設】ファイル名を変更（リネーム）するコマンド
 #[tauri::command(rename_all = "snake_case")]
-fn rename_novel(old_name: String, new_name: String) -> Result<(), String> {
-    let base_dir = get_save_directory();
+fn rename_novel(handle: tauri::AppHandle, old_name: String, new_name: String) -> Result<(), String> {
+    let base_dir = get_save_directory(&handle);
     let old_path = base_dir.join(&old_name);
     
     // 入力された新しい名前に「.txt」がついていなければ自動付与
@@ -98,8 +108,8 @@ fn rename_novel(old_name: String, new_name: String) -> Result<(), String> {
 
 // ✨【新設】指定されたファイル名の小説データを削除するコマンド
 #[tauri::command(rename_all = "snake_case")]
-fn delete_novel(filename: String) -> Result<(), String> {
-    let mut file_path = get_save_directory();
+fn delete_novel(handle: tauri::AppHandle, filename: String) -> Result<(), String> {
+    let mut file_path = get_save_directory(&handle);
     file_path.push(&filename);
 
     println!("【Backend】ファイルを削除します: {:?}", file_path);
@@ -115,8 +125,8 @@ fn delete_novel(filename: String) -> Result<(), String> {
 
 // ✨【新設】指定された名前で新しく白紙のテキストファイルを作成するコマンド
 #[tauri::command]
-fn create_new_novel(filename: String) -> Result<String, String> {
-    let base_dir = get_save_directory();
+fn create_new_novel(handle: tauri::AppHandle, filename: String) -> Result<String, String> {
+    let base_dir = get_save_directory(&handle);
     
     let mut clean_name = filename.clone();
     if !clean_name.ends_with(".txt") {
