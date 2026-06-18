@@ -216,6 +216,51 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
     setSelectionIndex(e.currentTarget.selectionStart);
   };
 
+  // 💡 矢印キーによる原稿用紙上の縦横移動を完全に制御するロジック
+  const handleTextareaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    const { cells, rawToGridMap } = gridData;
+    // 現在のカーソル位置に対応する、原稿用紙上の全体のマス目インデックスを取得
+    let currentGridIdx = rawToGridMap[selectionIndex];
+    
+    if (currentGridIdx === undefined) return;
+
+    // 押されたキーに応じて、原稿用紙上の移動先を計算
+    let nextGridIdx = currentGridIdx;
+
+    if (e.key === 'ArrowDown') {
+      // 下矢印：1マス下に移動
+      nextGridIdx = Math.min(cells.length - 1, currentGridIdx + 1);
+      e.preventDefault(); // ブラウザの標準挙動を無効化
+    } else if (e.key === 'ArrowUp') {
+      // 上矢印：1マス上に移動
+      nextGridIdx = Math.max(0, currentGridIdx - 1);
+      e.preventDefault();
+    } else if (e.key === 'ArrowLeft') {
+      // 左矢印：1列（20マス分）左の列へ移動
+      nextGridIdx = Math.min(cells.length - 1, currentGridIdx + 20);
+      e.preventDefault();
+    } else if (e.key === 'ArrowRight') {
+      // 右矢印：1列（20マス分）右の列へ戻る
+      nextGridIdx = Math.max(0, currentGridIdx - 20);
+      e.preventDefault();
+    } else {
+      // 矢印キー以外（文字入力など）は何もせずそのまま通す
+      return;
+    }
+
+    // 移動先のマスに格納されている、実際のテキストのインデックス（rawIdx）を取り出してカーソルを更新
+    if (cells[nextGridIdx]) {
+      const targetRawIdx = cells[nextGridIdx].rawIdx;
+      setSelectionIndex(targetRawIdx);
+
+      // 隠しtextareaの選択位置も同期させる
+      if (hiddenTextareaRef.current) {
+        hiddenTextareaRef.current.selectionStart = targetRawIdx;
+        hiddenTextareaRef.current.selectionEnd = targetRawIdx;
+      }
+    }
+  };
+
   // クリックしたマスから正確なインデックスを復元
   const handleCellClick = (pageIdx: number, charIdx: number) => {
     const targetCellGlobalIdx = pageIdx * charsPerPage + charIdx;
@@ -394,6 +439,10 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
           else if (firstChar === '】') { targetChar = '︼'; offsetX = 0.0; offsetY = -1.0; }
           else if (firstChar === '〔') { targetChar = '︹'; offsetX = 0.0; offsetY = -1.0; }
           else if (firstChar === '〕') { targetChar = '︺'; offsetX = 0.0; offsetY = -1.0; }
+          else if (firstChar === '〈') { targetChar = '︿'; offsetX = 0.0; offsetY = -1.0; }
+          else if (firstChar === '〉') { targetChar = '﹀'; offsetX = 0.0; offsetY = -1.0; }
+          else if (firstChar === '《') { targetChar = '︽'; offsetX = 0.0; offsetY = -1.0; }
+          else if (firstChar === '》') { targetChar = '︾'; offsetX = 0.0; offsetY = -1.0; }
 
           // 1文字目を描画
           pdf.text(targetChar, basePdfX + offsetX, basePdfY + offsetY);
@@ -717,6 +766,7 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
           value={rawText}
           onChange={handleTextareaChange}
           onSelect={handleTextareaSelect}
+          onKeyDown={handleTextareaKeyDown}
           onFocus={() => setIsFocused(true)}
           onBlur={() => setIsFocused(false)}
           style={{
