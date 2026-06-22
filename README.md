@@ -42,13 +42,12 @@
     `-- vite.config.ts
 ```
 ## 3. インストール手順
-本アプリは、windows上でのみ動作確認が完了しています。**macOSでの動作確認は未実施です**（2026.06.16）。
+本アプリは、windowsを前提とした開発を行っています。**現時点でmacOSには対応していません。**（2026.06.16）。
 
 ### 3-1. インストーラーのダウンロード
-[Releases ページ](https://github.com/yskamioyc-cmyk/genkoo/releases)にアクセスし、お使いのOSに合わせて最新のファイルをダウンロードしてください。
+[Releases ページ](https://github.com/yskamioyc-cmyk/genkoo/releases)にアクセスし、最新のファイルをダウンロードしてください。
 
 * **Windows をお使いの方:** `genkoo_1.0.0_x64-setup.msi`（または `.exe`）
-* **macOS をお使いの方:** `genkoo_1.0.0_x64.dmg`（または `_aarch64.dmg`）
 
 ---
 
