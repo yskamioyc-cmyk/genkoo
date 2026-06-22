@@ -514,6 +514,21 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
                 {pageIndex + 1} / {paperCount}
               </div>
 
+              {/* 💡【新設】原稿用紙のロゴ（左下・二重線の枠外すぐ下） */}
+              <div style={{
+                position: 'absolute',
+                bottom: '22px',       // 💡 二重線の枠の下端と綺麗に揃う高さ
+                left: '72px',         // 💡 二重線の枠の左端と綺麗に揃う位置
+                color: 'rgba(34, 112, 63, 0.4)', // 💡 枠線と同じ緑色（透明度40%）
+                fontSize: '11px',
+                fontWeight: 'bold',
+                fontFamily: 'sans-serif',
+                userSelect: 'none',   // テキスト選択の邪魔にならないようにする
+                pointerEvents: 'none' // クリックイベントを透過させる
+              }}>
+                20×20 Genkoo
+              </div>
+
               <div style={{ position: 'relative', width: '808px', height: '546px', border: '3px double rgba(34, 112, 63, 0.7)', backgroundColor: '#fffdf9', boxSizing: 'border-box' }}>
                 <div style={{ display: 'grid', gridTemplateRows: 'repeat(20, 27px)', gridTemplateColumns: `repeat(10, 5px 28px 5px) 48px repeat(10, 5px 28px 5px)`, gridAutoFlow: 'column', width: '100%', height: '100%', direction: 'rtl' }}>
                   {Array.from({ length: charsPerPage }).map((_, charIndex) => {
@@ -614,7 +629,7 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
                   <div style={{ gridColumn: 31, gridRow: '1 / span 20', width: '48px', height: '540px', padding: '10px 5px', borderLeft: '1px solid rgba(34, 112, 63, 0.35)', borderRight: '1px solid rgba(34, 112, 63, 0.35)', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', alignItems: 'center', color: 'rgba(34, 112, 63, 0.4)', fontSize: '11px', fontWeight: 'bold', userSelect: 'none', backgroundColor: '#fffdf9', boxSizing: 'border-box' }}>
                     <div style={{ width: 0, height: 0, borderLeft: '6px solid transparent', borderRight: '6px solid transparent', borderTop: '8px solid rgba(34, 112, 63, 0.4)' }} />
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', flexGrow: 1, justifyContent: 'center' }}>
-                      <div style={{ letterSpacing: '2px' }}>バランス</div><div>２０×２０</div><div style={{ fontSize: '10px', opacity: 0.8 }}>Genkoo</div>
+                      <div style={{ letterSpacing: '2px' }}>　</div><div>　</div><div style={{ fontSize: '10px', opacity: 0.8 }}>　</div>
                     </div>
                     <div style={{ width: 0, height: 0, borderLeft: '6px solid transparent', borderRight: '6px solid transparent', borderBottom: '8px solid rgba(34, 112, 63, 0.4)' }} />
                   </div>
