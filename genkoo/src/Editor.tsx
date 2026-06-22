@@ -81,22 +81,26 @@ export const Editor: React.FC<EditorProps> = ({ currentFilename, onNavigate }) =
           let hwStr = "";
           const startRawIdx = currentRawIdx;
           const remainingCellsInLine = 20 - linePos;
-          const charsPerCell = 2.5; // 1マスに収まる半角文字数の目安（約2.5文字）
+          
+          // 1マスに収まる半角文字数の目安（必要に応じて 3.0 などに調整してください）
+          const charsPerCell = 2.5; 
           const maxCharsInLine = Math.floor(remainingCellsInLine * charsPerCell);
           
           let count = 0;
-          // 現在の列（行末）を突き抜けないように、最大文字数で区切る
           while (j < line.length && isHalfWidthAscii(line[j]) && count < Math.max(1, maxCharsInLine)) {
             hwStr += line[j];
             j++;
             count++;
           }
 
-          const consumedCells = Math.max(1, Math.ceil(hwStr.length / charsPerCell));
+          // 💡 修正ポイント: Math.ceil から Math.round に変更することで、
+          // 少しのはみ出しなら1マスに収め、無駄な空きマスを作らないようにする
+          const consumedCells = Math.max(1, Math.round(hwStr.length / charsPerCell));
 
           // 最初のマスに半角文字列全体を格納
           cells.push({ char: hwStr, rawIdx: startRawIdx, isHalfWidth: true });
           const firstCellIndex = cells.length - 1;
+          // ... 以下略
           
           // その文字列に含まれるすべての文字のカーソル位置を最初のマスにマッピング
           for (let k = 0; k < hwStr.length; k++) {
